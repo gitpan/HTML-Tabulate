@@ -30,11 +30,12 @@ my $t = HTML::Tabulate->new;
 my $table = $t->render($data, {
   labels => 1,
   null => '-',
-  fields => [ qw(emp_id emp_name emp_title emp_birth_dt) ],
+  fields => [ qw(emp_id emp_name emp_title emp_birth_dt emp_modify_ts emp_create_ts) ],
   fields_add => {
     emp_birth_dt => 'edit',
     emp_name => [ qw(emp_givenname emp_surname) ],
   },
+  fields_omit => [ qw(emp_modify_ts emp_create_ts) ],
   field_attr => {
     emp_surname => {
       value => sub { my ($x,$r) = @_; my $name = $r->[1]; $name =~ s/^\s*\w+\s*//; $name }

@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.15';
+$VERSION = '0.16';
 my %DEFAULT_DEFN = (
     style => 'down', 
     table => {},
@@ -25,6 +25,7 @@ my %VALID_ARG = (
     td => 'HASH',
     fields => 'ARRAY',
     fields_add => 'HASH',
+    fields_omit => 'ARRAY',
     in_fields => 'ARRAY',
     labels => 'SCALAR/HASH',
     label_links => 'HASH',
@@ -37,6 +38,8 @@ my %VALID_ARG = (
 #   first => 'SCALAR',
 #   last => 'SCALAR',
     field_attr => 'HASH',
+    # xhtml: boolean indicating whether to use xhtml-style tagging
+    xhtml => 'SCALAR',
 );
 my %VALID_FIELDS = (
     -defaults => 'HASH',
@@ -378,6 +381,15 @@ sub splice_fields
     }
 }
 
+# Omit/remove fields from the fields array
+sub omit_fields
+{
+    my $self = shift;
+    my $defn = $self->{defn_t};
+    my %omit = map { $_ => 1 } @{$defn->{fields_omit}};
+    $defn->{fields} = [ grep { ! exists $omit{$_} } @{$defn->{fields}} ];
+}
+
 #
 # Deep copy routine, originally swiped from a Randal Schwartz column
 #
@@ -439,6 +451,7 @@ sub prerender_munge
 
     # Splice any additional fields into the fields array
     $self->splice_fields if $defn_t->{fields_add};
+    $self->omit_fields if $defn_t->{fields_omit};
 
     # Map top-level 'labels' and 'label_links' hashrefs into fields
     if (ref $defn_t->{labels} eq 'HASH') {
@@ -493,12 +506,13 @@ sub prerender_munge
 # Return the given HTML $tag with attributes from the $attr hashref.
 #   An attribute with a non-empty value (i.e. not '' or undef) is rendered
 #   attr="value"; one with a value of '' is rendered as a 'bare' attribute
-#   (i.e. no '='); one with undef is ignored (allowing unset CGI parameters
-#   to be ignored).
+#   (i.e. no '='), or as attr="attr" if in xhtml mode; one with undef is 
+#   simply ignored (allowing unset CGI parameters to be ignored).
 #
 sub start_tag
 {
-    my ($self, $tag, $attr) = @_;
+    my ($self, $tag, $attr, $close) = @_;
+    my $xhtml = $self->{defn_t}->{xhtml};
     my $str = "<$tag";
     if (ref $attr eq 'HASH') {
         for my $a (sort keys %$attr) {
@@ -506,10 +520,11 @@ sub start_tag
                 $str .= qq( $a="$attr->{$a}");
             }
             elsif (defined $attr->{$a}) {
-                $str .= qq( $a);
+                $str .= $xhtml ? qq( $a="$a") : qq( $a);
             }
         }
     }
+    $str .= ' /' if $close && $xhtml;
     $str .= ">";
     return $str;
 }
@@ -1160,6 +1175,13 @@ produces a composite field list containing:
 
   qw(emp_id emp_name emp_givenname emp_surname emp_title 
      emp_birth_dt edit)
+
+
+=item fields_omit
+
+Arrayref. Used to omit fields from the base field list. e.g.
+
+  fields_omit => [ qw(emp_modify_ts emp_create_ts) ]
 
 
 =item in_fields

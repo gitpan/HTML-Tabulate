@@ -94,18 +94,23 @@ SKIP: {
     is ($table, $result{render2}, "DBIx::Recordset render2 okay");
   }
 
-  # Class::DBI
   SKIP: {
+    # Class::DBI setup
     eval { require Class::DBI };
-    skip "Class::DBI not installed", $tests2 if $@;
+    if ($@) {
+      skip "Class::DBI not installed", $tests2;
+    }
+    else {
+      # Define a temp Class::DBI Employee class
+      eval qq(
+        package Employee;
+        use base 'Class::DBI';
+        __PACKAGE__->set_db('Main', 'dbi:mysql:test');
+        __PACKAGE__->table('emp_tabulate');
+        __PACKAGE__->columns(Essential => qw(emp_id emp_name emp_title emp_birth_dt));
+        );
+    }
   
-    # Define a temp Class::DBI Employee class
-    package Employee;
-    use base 'Class::DBI';
-    __PACKAGE__->set_db('Main', 'dbi:mysql:test');
-    __PACKAGE__->table('emp_tabulate');
-    __PACKAGE__->columns(Essential => qw(emp_id emp_name emp_title emp_birth_dt));
-
     package main;
     my $iter = eval { Employee->retrieve_all };
     skip "Class::DBI employee retrieve failed", $tests2 if $@;
