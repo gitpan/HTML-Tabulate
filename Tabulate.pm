@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.16';
+$VERSION = '0.18';
 my %DEFAULT_DEFN = (
     style => 'down', 
     table => {},
@@ -361,6 +361,16 @@ sub derive_fields
         unless ref $defn->{fields} eq 'ARRAY';
 }
 
+# Derive a fields list if none is defined
+sub check_fields
+{
+    my $self = shift;
+    my ($set) = @_;
+    $self->derive_fields($set) 
+        if ref $self->{defn_t}->{fields} ne 'ARRAY' || 
+           ! @{$self->{defn_t}->{fields}};
+}
+
 # Splice additional fields into the fields array
 sub splice_fields
 {
@@ -437,13 +447,12 @@ sub prerender_munge
 
     # Copy $defn to $self->{defn_t}
     $self->{defn_t} = $self->deepcopy($defn);
-    my $defn_t = $self->{defn_t};
 
     # Try to derive field list if not set
-    $self->derive_fields($set) 
-        if ref $defn_t->{fields} ne 'ARRAY' || ! @{$defn_t->{fields}};
+    $self->check_fields($set);
 
     # Set up a field map for arrayref-of-arrayref sets
+    my $defn_t = $self->{defn_t};
     my $pos = 0;
     my $fields = ref $defn_t->{in_fields} eq 'ARRAY' ? $defn_t->{in_fields} : $defn_t->{fields};
     $defn_t->{field_map} = { map  { $_ => $pos++; } @$fields }
@@ -506,8 +515,8 @@ sub prerender_munge
 # Return the given HTML $tag with attributes from the $attr hashref.
 #   An attribute with a non-empty value (i.e. not '' or undef) is rendered
 #   attr="value"; one with a value of '' is rendered as a 'bare' attribute
-#   (i.e. no '='), or as attr="attr" if in xhtml mode; one with undef is 
-#   simply ignored (allowing unset CGI parameters to be ignored).
+#   (i.e. no '=') in non-xhtml mode; one with undef is simply ignored 
+#   (allowing unset CGI parameters to be ignored).
 #
 sub start_tag
 {
@@ -516,11 +525,11 @@ sub start_tag
     my $str = "<$tag";
     if (ref $attr eq 'HASH') {
         for my $a (sort keys %$attr) {
-            if ($attr->{$a} ne '') {
+            if (defined $attr->{$a} && $attr->{$a} ne '') {
                 $str .= qq( $a="$attr->{$a}");
             }
             elsif (defined $attr->{$a}) {
-                $str .= $xhtml ? qq( $a="$a") : qq( $a);
+                $str .= $xhtml ? qq( $a="") : qq( $a);
             }
         }
     }
@@ -565,7 +574,7 @@ sub cell_format
         my $ref = ref $fattr->{format};
         croak "[cell_format] invalid '$field' format: $ref"
             if $ref && $ref ne 'CODE';
-        $data = &{$fattr->{format}}($data, $row || {}) if $ref eq 'CODE';
+        $data = &{$fattr->{format}}($data, $row || {}, $field) if $ref eq 'CODE';
         $data = sprintf $fattr->{format}, $data if ! $ref;
     }
 
@@ -581,7 +590,7 @@ sub cell_format
         my $ref = ref $fattr->{link};
         croak "[cell_format] invalid '$field' link: $ref"
             if $ref && $ref ne 'CODE';
-        $ldata = &{$fattr->{link}}($data_in, $row || {}) if $ref eq 'CODE';
+        $ldata = &{$fattr->{link}}($data_in, $row || {}, $field) if $ref eq 'CODE';
         $ldata = sprintf $fattr->{link}, $data_in if ! $ref;
         $data = sprintf qq(<a href="%s">%s</a>), 
             uri_escape($ldata, $URI_ESCAPE_CHARS), $data;
@@ -685,14 +694,14 @@ sub cell_content
         $value = $row->{$field};
     }
     # 'value' literal or subref takes precedence over row
-    if ($fattr->{value}) {
+    if (exists $fattr->{value}) {
         my $ref = ref $fattr->{value};
         if (! $ref) {
             # $value = sprintf $fattr->{value}, $value;
             $value = $fattr->{value};
         }
         elsif ($ref eq 'CODE') {
-            $value = &{$fattr->{value}}($value, $row);
+            $value = &{$fattr->{value}}($value, $row, $field);
         }
         else {
             croak "[cell_content] invalid '$field' value: $ref";
@@ -726,16 +735,17 @@ sub cell_tags
 #
 sub cell 
 {
-    my ($self, $row, $field) = @_;
-    my ($fattr, $tx_attr);
+    my ($self, $row, $field, $fattr, $tx_attr) = @_;
 
     # Merge default and field attributes first time through (labels + data)
-    if (! defined $row || ! $self->{defn_t}->{field_attr}->{$field}->{td_attr}) {
-        ($fattr, $tx_attr) = $self->cell_merge_defaults($row, $field);
-    }
-    else {
-        $fattr = $self->{defn_t}->{field_attr}->{$field};
-        $tx_attr = $self->{defn_t}->{field_attr}->{$field}->{td_attr};
+    unless ($fattr && $tx_attr) {
+        if (! defined $row || ! $self->{defn_t}->{field_attr}->{$field}->{td_attr}) {
+            ($fattr, $tx_attr) = $self->cell_merge_defaults($row, $field);
+        }
+        else {
+            $fattr = $self->{defn_t}->{field_attr}->{$field};
+            $tx_attr = $self->{defn_t}->{field_attr}->{$field}->{td_attr};
+        }
     }
 
     # Generate output
@@ -777,12 +787,13 @@ sub stripe
     }
 }
 
+# 
+# Setup a row stripe by modifying the 'tr' definition
 #
-# Render a single table row (style 'down')
-#
-sub row_down 
+sub row_stripe
 {
-    my ($self, $row, $rownum) = @_;
+    my $self = shift;
+    my ($rownum) = @_;
     my $defn_t = $self->{defn_t};
 
     # Table striping
@@ -798,11 +809,20 @@ sub row_down
     }
     $self->stripe($tr, $rownum, $defn_t->{stripe}, $defn_t->{stripe_type}) 
         if $defn_t->{stripe};
+    return $tr;
+}
 
+#
+# Render a single table row (style 'down')
+#
+sub row_down 
+{
+    my ($self, $row, $rownum) = @_;
     # Render row into $out
+    my $tr = $self->row_stripe($rownum);
     my $out = '';
     $out .= $self->start_tag('tr', $tr);
-    for my $f (@{$defn_t->{fields}}) {
+    for my $f (@{$self->{defn_t}->{fields}}) {
         # Labels/headings
         if ($rownum == 0) {
             $out .= $self->cell(undef, $f);
@@ -883,16 +903,13 @@ sub body_down
 sub row_across
 {
     my ($self, $data, $rownum, $field) = @_;
-    my $defn_t = $self->{defn_t};
-    my $tr = $defn_t->{tr} || {};
 
     # Begin row
-    $self->stripe($tr, $rownum, $defn_t->{stripe}, $defn_t->{stripe_type}) 
-        if $defn_t->{stripe};
+    my $tr = $self->row_stripe($rownum);
     my $body = $self->start_tag('tr', $tr);
 
     # Label/heading
-    $body .= $self->cell(undef, $field) if $defn_t->{labels};
+    $body .= $self->cell(undef, $field) if $self->{defn_t}->{labels};
 
     # Data
     for my $row (@$data) {
@@ -900,15 +917,10 @@ sub row_across
     }
 
     # End row
-    $rownum++;
     $body .= $self->end_tag('tr', $tr) . "\n";
 }
 
-#
-# Render the table body with successive records across the page 
-#   (i.e. fields down the page)
-#
-sub body_across 
+sub get_dataset
 {
     my ($self, $set) = @_;
 
@@ -944,17 +956,54 @@ sub body_across
         croak "[body_across] invalid Tabulate data type '$set'";
     }
 
-    # Iterate over fields
+    return @data;
+}
+
+#
+# Render the table body with successive records across the page 
+#   (i.e. fields down the page)
+#
+sub body_across 
+{
+    my ($self, $set) = @_;
+
+    # Iterate over fields (instead of data rows)
+    my @data = $self->get_dataset($set);
     my $rownum = 1;
     my $body = '';
     for my $field (@{$self->{defn_t}->{fields}}) {
         $body .= $self->row_across(\@data, $rownum, $field);
+        $rownum++;
     }
 
     return $body;
 }
 
 # -------------------------------------------------------------------------
+sub render_table
+{
+    my ($self, $set) = @_;
+
+    # Start table
+    my $out = $self->start_table();
+
+    # Style-specific bodies (default is 'down')
+    if ($self->{defn_t}->{style} eq 'down') {
+        $out .= $self->body_down($set);
+    }
+    elsif ($self->{defn_t}->{style} eq 'across') {
+        $out .= $self->body_across($set);
+    }
+    else {
+        croak "[render] invalid style '$self->{defn_t}->{style}'";
+    }
+
+    # End table
+    $out .= $self->end_table();
+  
+    return $out;
+}
+
 #
 # Render the data set $set using the settings in $self->{defn} + $defn,
 #   returning the resulting string.
@@ -981,24 +1030,7 @@ sub render
         $self->prerender_munge($set);
     }
 
-    # Start table
-    my $out = $self->start_table();
-
-    # Style-specific bodies (default is 'down')
-    if ($self->{defn_t}->{style} eq 'down') {
-        $out .= $self->body_down($set);
-    }
-    elsif ($self->{defn_t}->{style} eq 'across') {
-        $out .= $self->body_across($set);
-    }
-    else {
-        croak "[render] invalid style '$self->{defn_t}->{style}'";
-    }
-
-    # End table
-    $out .= $self->end_table();
-
-    return $out;
+    $self->render_table($set);
 }
 
 1;
@@ -1040,41 +1072,13 @@ HTML::Tabulate - HTML table rendering class
                 link => "emp.html?id=%s",
                 align => 'right',
             },
-            # upper case employee names
-            name => { format => sub { uc(shift) } },
+            # upper all names
+            qr/name$/ => { format => sub { uc(shift) } },
         },
     };
 
     # Render the table using the original and additional settings
     print $t->render($data, $table_defn2);
-
-=begin HIDE
-
-            # fake an edit column that isn't actually in the data
-            edit => {
-                value => 'edit',
-                link => sub { 
-                   ($value, $rec) = @_; 
-                   sprintf "edit.html?id=%s&type=%s, 
-                     $rec->emp_id, $rec->emp_type;
-                },
-            },
-        },
-    };
-
-    # Render the data with some different settings
-    print $t->render($data, {
-        fields => [ qw(emp_id name) ],
-        emp_id => { format => '%-05d' },
-        name => {
-            value => sub {
-                ($name, $rec) = shift;
-                sprintf "%s (%s)", $name, $rec->title;
-            },
-        },
-    });
-
-=end HIDE
 
 
 =head1 DESCRIPTION
@@ -1312,16 +1316,17 @@ will cause emp_id table cells to be displayed as:
 =item value
 
 Scalar or subroutine reference. Used to override or modify the current
-data value. If scalar is taken as a literal. If a subroutine reference
-is called with two arguments, the data value itself, and the entire
-data row. This allows the value to be modified or set either based on
-an existing value, or on any other value in the row. e.g.
+data value. If scalar is taken as a literal. If a subroutine reference,
+is called with three arguments: the data value itself, the entire data 
+row, and the field name. This allows the value to be modified or set 
+either based on an existing value, or on any other value in the row. 
+e.g.
 
   # Derive emp_fname from first word of emp_name
   field_attr => {
     emp_fname => { 
       value => sub { 
-        ($fn, $row) = @_; 
+        my ($fn, $row, $field) = @_; 
         if ($row->{emp_name} =~ m/^\s*(\w+)/) { return $1; }
         return '';
       },
@@ -1334,7 +1339,8 @@ an existing value, or on any other value in the row. e.g.
 Scalar or subroutine reference. Used to format the current data value.
 If scalar, is taken as a sprintf pattern, with the current data value
 as the single argument. If a subroutine reference, is called in the 
-same way as the value subref above i.e. $format->($data_item, $row)
+same way as the value subref above 
+i.e. $format->($data_item, $row, $field)
 
 =item link
 
@@ -1342,7 +1348,7 @@ Scalar or subroutine reference. Used as the link target to make an
 HTML link using the current data value. If scalar, the target is taken 
 as a sprintf pattern, with the current data value as the single argument. 
 If a subroutine reference, is called in the same way as the value subref 
-described above i.e. $link->($data_item, $row) e.g.
+described above i.e. $link->($data_item, $row, $field) e.g.
 
   field_attr => {
     emp_id => {

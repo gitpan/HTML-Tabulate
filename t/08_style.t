@@ -46,7 +46,7 @@ $table = $t->render($data, {
   style => 'across',
 });
 is($table, $result{across}, "result across ok");
-# print $table, "\n";
+print $table, "\n";
 
 
 
