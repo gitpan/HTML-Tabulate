@@ -9,6 +9,7 @@ t/05_attr.t
 t/06_fattr.t
 t/08_style.t
 t/10_iterators.t
+t/11_fields_add.t
 t/t1/fbwb
 t/t1/fred
 t/t1/fredbarney
@@ -24,3 +25,4 @@ t/t8/across
 t/t8/down
 t/t10/render1
 t/t10/render2
+t/t11/render1

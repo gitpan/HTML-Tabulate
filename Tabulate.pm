@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.14';
+$VERSION = '0.15';
 my %DEFAULT_DEFN = (
     style => 'down', 
     table => {},
@@ -24,6 +24,7 @@ my %VALID_ARG = (
     th => 'HASH',
     td => 'HASH',
     fields => 'ARRAY',
+    fields_add => 'HASH',
     in_fields => 'ARRAY',
     labels => 'SCALAR/HASH',
     label_links => 'HASH',
@@ -80,7 +81,10 @@ sub check_valid
     my %valid = $self->get_valid_arg();
     my (@invalid, @badtype);
     for (sort keys %$defn) {
-        push @invalid, $_ if ! exists $valid{$_};
+        if (! exists $valid{$_}) {
+            push @invalid, $_;
+            next;
+        }
         my $type = ref $defn->{$_};
         push @badtype, $_ 
             if $type && $type ne 'SCALAR' && $valid{$_} !~ m/$type/;
@@ -97,7 +101,10 @@ sub check_valid
     @invalid = ();
     @badtype = ();
     for (sort grep(/^-/, keys(%{$defn->{field_attr}})) ) {
-        push @invalid, $_ if ! exists $valid{$_};
+        if (! exists $valid{$_}) {
+            push @invalid, $_;
+            next;
+        }
         my $type = ref $defn->{field_attr}->{$_};
         push @badtype, $_ 
             if $type && $type ne 'SCALAR' && $valid{$_} !~ m/$type/;
@@ -345,10 +352,34 @@ sub derive_fields
     else {
         croak "[derive_fields] no fields found and set '$set' is strange type: $@";
     }
+    
+    croak sprintf "[derive_fields] field derivation failed (fields: %s)", 
+            $defn->{fields} 
+        unless ref $defn->{fields} eq 'ARRAY';
+}
+
+# Splice additional fields into the fields array
+sub splice_fields
+{
+    my $self = shift;
+    my $defn = $self->{defn_t};
+    my $add = $defn->{fields_add};
+    return unless ref $defn->{fields} eq 'ARRAY' && ref $add eq 'HASH';
+
+    for (my $i = $#{$defn->{fields}}; $i >= 0; $i--) {
+        my $f = $defn->{fields}->[$i];
+        next unless $add->{$f};
+        if (ref $add->{$f} eq 'ARRAY') {
+            splice @{$defn->{fields}}, $i+1, 0, @{$add->{$f}};
+        }
+        else {
+            splice @{$defn->{fields}}, $i+1, 0, $add->{$f};
+        }
+    }
 }
 
 #
-# Deep copy routine, swiped from a Randal Schwartz column
+# Deep copy routine, originally swiped from a Randal Schwartz column
 #
 sub deepcopy 
 {
@@ -361,6 +392,9 @@ sub deepcopy
         return {map { $_ => $self->deepcopy($this->{$_}) } keys %$this};
     } elsif (ref $this eq "CODE") {
         return $this;
+    } elsif (sprintf $this) {
+        # Object! As a last resort, try copying the stringification value
+        return sprintf $this;
     } else {
         die "what type is $_? (" . ref($this) . ")";
     }
@@ -375,7 +409,8 @@ sub deepcopy
 #
 sub prerender_munge
 {
-    my ($self, $set, $defn) = @_;
+    my $self = shift;
+    my ($set, $defn) = @_;
 
     # Use $self->{defn} if $defn not passed
     $defn ||= $self->{defn};
@@ -401,6 +436,9 @@ sub prerender_munge
     my $fields = ref $defn_t->{in_fields} eq 'ARRAY' ? $defn_t->{in_fields} : $defn_t->{fields};
     $defn_t->{field_map} = { map  { $_ => $pos++; } @$fields }
         if ref $set eq 'ARRAY' && @$set && ref $set->[0] eq 'ARRAY';
+
+    # Splice any additional fields into the fields array
+    $self->splice_fields if $defn_t->{fields_add};
 
     # Map top-level 'labels' and 'label_links' hashrefs into fields
     if (ref $defn_t->{labels} eq 'HASH') {
@@ -620,25 +658,26 @@ sub cell_merge_defaults
 sub cell_content
 {
     my ($self, $row, $field, $fattr) = @_;
+    my $defn = $self->{defn_t};
 
-    # Set data from $row
-    my $data;
+    # Get value from $row
+    my $value;
     if (ref $row eq 'ARRAY') {
-        my $i = keys %{$self->{defn_t}->{field_map}} ? $self->{defn_t}->{field_map}->{$field} : $field;
-        $data = $row->[ $i ];
+        my $i = keys %{$defn->{field_map}} ? $defn->{field_map}->{$field} : $field;
+        $value = $row->[ $i ] if defined $i;
     }
     elsif (ref $row) {
-        $data = $row->{$field};
+        $value = $row->{$field};
     }
     # 'value' literal or subref takes precedence over row
     if ($fattr->{value}) {
         my $ref = ref $fattr->{value};
         if (! $ref) {
-            # $data = sprintf $fattr->{value}, $data;
-            $data = $fattr->{value};
+            # $value = sprintf $fattr->{value}, $value;
+            $value = $fattr->{value};
         }
         elsif ($ref eq 'CODE') {
-            $data = &{$fattr->{value}}($data, $row);
+            $value = &{$fattr->{value}}($value, $row);
         }
         else {
             croak "[cell_content] invalid '$field' value: $ref";
@@ -646,12 +685,14 @@ sub cell_content
     }
 
     # Format
-    $data = '' if ! defined $data;
-    $data =~ s/^\s*(.*?)\s*$/$1/ if $self->{defn_t}->{trim};
-    $data = $self->cell_format($data, $fattr, $row, $field) if $data ne '';
-    $data = $self->{defn_t}->{null} if defined $self->{defn_t}->{null} && $data eq '';
+    my $fvalue = $value;
+    $fvalue = '' if ! defined $fvalue;
+    $fvalue =~ s/^\s*(.*?)\s*$/$1/ if $defn->{trim};
+    $fvalue = $self->cell_format($fvalue, $fattr, $row, $field) if $fvalue ne '';
+    $fvalue = $defn->{null} 
+        if defined $defn->{null} && $fvalue eq '';
 
-    return $data;
+    return wantarray ? ($fvalue, $value) : $fvalue;
 }
 
 #
@@ -912,7 +953,7 @@ sub render
     if (ref $self eq 'HASH' || ref $self eq 'ARRAY') {
       $defn = $set;
       $set = $self;
-      $self = HTML::Tabulate->new($defn);
+      $self = __PACKAGE__->new($defn);
       undef $defn;
     }
 
@@ -1101,14 +1142,34 @@ HTML::Tabulate will attempt to derive a useful default set from your data, and
 croaks if it is not successful. 
 
 
+=item fields_add
+
+Hashref. Used to define additional fields to be included in the output to 
+supplement a default field list, or fields derived from a data object itself.
+The keys of the fields_add hashref are existing field names; the values are
+scalar values or arrayref lists of values to be inserted into the field
+list B<after> the key field. e.g.
+
+  fields_add => {
+    emp_name => [ 'emp_givenname', 'emp_surname' ],
+    emp_birth_dt => 'edit',
+  }
+
+applied to a fields list qw(emp_id emp_name emp_title emp_birth_dt)
+produces a composite field list containing:
+
+  qw(emp_id emp_name emp_givenname emp_surname emp_title 
+     emp_birth_dt edit)
+
+
 =item in_fields
 
 Arrayref. Defines the order in which fields are defined in the dataset, if
-different to the output order defined in 'fields' above. Only makes sense 
-if the dataset rows are arrayrefs. e.g.
+different to the output order defined in 'fields' above. e.g.
 
   in_fields => [ qw(emp_id emp_title emp_birth_dt emp_title) ]
 
+Using in_fields only makes sense if the dataset rows are arrayrefs. 
 
 
 =item style
