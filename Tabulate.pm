@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.19';
+$VERSION = '0.20';
 my %DEFAULT_DEFN = (
     style => 'down', 
     table => {},
@@ -40,6 +40,12 @@ my %VALID_ARG = (
     field_attr => 'HASH',
     # xhtml: boolean indicating whether to use xhtml-style tagging
     xhtml => 'SCALAR',
+    # title: title/heading to be rendered above table
+    title => 'SCALAR/HASH',
+    # text: text to be rendered above table, after title
+    text => 'SCALAR',
+    # caption: text to be rendered below table
+    caption => 'SCALAR',
 );
 my %VALID_FIELDS = (
     -defaults => 'HASH',
@@ -50,9 +56,12 @@ my %FIELD_ATTR = (
     format => 'SCALAR/CODE',
     link => 'SCALAR/CODE',
     label => 'SCALAR/CODE',
+    label_format => 'SCALAR/CODE',
     label_link => 'SCALAR/CODE',
+    label_escape => 'SCALAR',
 );
 my $URI_ESCAPE_CHARS = "^A-Za-z0-9\-_.!~*'()?&;:/=";
+our $TITLE_HEADING_LEVEL = 'h2';
 
 # -------------------------------------------------------------------------
 # Provided for subclassing
@@ -330,8 +339,9 @@ sub derive_fields
     # Otherwise try treating as a hash
     elsif (defined eval { keys %$set }) {
         my $first = (sort keys %$set)[0];
+        my $ref = ref $set->{$first} if defined $first;
         # Check whether first value is reference
-        if (my $ref = ref $set->{$first}) {
+        if ($ref) {
             # Hashref of hashrefs
             if ($ref eq 'HASH') {
                 $defn->{fields} = [ sort keys %{$set->{$first}} ];
@@ -367,8 +377,9 @@ sub check_fields
     my $self = shift;
     my ($set) = @_;
     $self->derive_fields($set) 
-        if ref $self->{defn_t}->{fields} ne 'ARRAY' || 
-           ! @{$self->{defn_t}->{fields}};
+        if ! $self->{defn_t}->{fields} ||
+         ref $self->{defn_t}->{fields} ne 'ARRAY' || 
+         ! @{$self->{defn_t}->{fields}};
 }
 
 # Splice additional fields into the fields array
@@ -544,10 +555,76 @@ sub end_tag
     return "</$tag>";
 }
 
+# ------------------------------------------------------------------------
+# Pre- and post-table content
+
+# title: title/heading labelling the table. 
+#   If scalar, rendered in $TITLE_HEADING_LEVEL tags.
+#   If hashref, rendered using hashref keys as attributes, with text taken
+#     from 'title' attribute, and 'tag' attribute overriding 
+#     $TITLE_HEADING_LEVEL
+sub title
+{
+    my $self = shift;
+    my $title = $self->{defn_t}->{title};
+    if (ref $title eq 'HASH') {
+        my $text = $title->{title};
+        return '' unless $text;
+        my $tag = $title->{tag} || $TITLE_HEADING_LEVEL;
+        delete $title->{tag};
+        delete $title->{title};
+        return $self->start_tag($tag, $title) . $text .
+               $self->end_tag($tag, $title) . "\n";
+    }
+    else {
+        return $self->start_tag($TITLE_HEADING_LEVEL) . $title . 
+               $self->end_tag($TITLE_HEADING_LEVEL) . "\n";
+    }
+}
+
+# text: text preceding being table tag (after title, if any)
+sub text
+{
+    my $self = shift;
+    my $text = $self->{defn_t}->{text};
+    chomp $text;
+
+    # Use text verbatim if already wrapped in tags
+    return "$text\n" if $text =~ m/^<.*>$/s;
+
+    # Otherwise wrap in paragraph tags
+    return "<p>$text</p>\n";
+}
+
+# caption: text following end table tag
+sub caption
+{
+    my $self = shift;
+    my $text = $self->{defn_t}->{caption};
+    chomp $text;
+
+    # Use text verbatim if already wrapped in tags
+    return "$text\n" if $text =~ m/^<.*>$/s;
+
+    # Otherwise wrap in paragraph tags
+    return "<p>$text</p>\n";
+}
+
+# ------------------------------------------------------------------------
+# Content before begin table tag
+sub pre_table
+{
+    my $self = shift;
+    my $content = '';
+    $content .= $self->title if $self->{defn_t}->{title};
+    $content .= $self->text  if $self->{defn_t}->{text};
+    return $content;
+}
+
 # Provided for subclassing
 sub start_table 
 {
-    my ($self) = @_;
+    my $self = shift;
     return '' if exists $self->{defn_t}->{table} && ! $self->{defn_t}->{table};
     return $self->start_tag('table',$self->{defn_t}->{table}) . "\n";
 }
@@ -555,11 +632,21 @@ sub start_table
 # Provided for subclassing
 sub end_table 
 {
-    my ($self) = @_;
+    my $self = shift;
     return '' if exists $self->{defn_t}->{table} && ! $self->{defn_t}->{table};
     return $self->end_tag('table') . "\n";
 }
 
+# Content after end table tag
+sub post_table
+{
+    my $self = shift;
+    my $content = '';
+    $content .= $self->caption if $self->{defn_t}->{caption};
+    return $content;
+}
+
+# ------------------------------------------------------------------------
 # Apply 'format' formatting
 sub cell_format_format
 {
@@ -607,13 +694,13 @@ sub cell_format
     my ($data, $fattr, $row, $field) = @_;
     my $data_unformatted = $data;
 
-    # 'format' subroutine or sprintf pattern
-    $data = $self->cell_format_format(@_) 
-        if $fattr->{format};
-
     # 'escape' boolean for simple tag escaping (defaults to on)
     $data = $self->cell_format_escape($data) 
         if $fattr->{escape} || ! exists $fattr->{escape};
+
+    # 'format' subroutine or sprintf pattern
+    $data = $self->cell_format_format(@_) 
+        if $fattr->{format};
 
     # 'link' subroutine or sprintf pattern
     $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
@@ -745,7 +832,8 @@ sub cell_content
     my $fvalue = $value;
     $fvalue = '' if ! defined $fvalue;
     $fvalue =~ s/^\s*(.*?)\s*$/$1/ if $defn->{trim};
-    $fvalue = $self->cell_format($fvalue, $fattr, $row, $field) if $fvalue ne '';
+    $fvalue = $self->cell_format($fvalue, $fattr, $row, $field) 
+        if defined $fvalue && $fvalue ne '';
     $fvalue = $defn->{null} 
         if defined $defn->{null} && $fvalue eq '';
 
@@ -760,6 +848,7 @@ sub cell_tags
     my ($self, $data, $row, $field, $tx_attr) = @_;
 
     my $tag = ! defined $row ? 'th' : 'td';
+    $data = '' unless defined $data;
     return $self->start_tag($tag, $tx_attr) . $data . $self->end_tag($tag);
 }
 
@@ -1033,22 +1122,25 @@ sub render_table
 {
     my ($self, $set) = @_;
 
-    # Start table
-    my $table = $self->start_table();
-
     # Style-specific bodies (default is 'down')
+    my $body;
     if ($self->{defn_t}->{style} eq 'down') {
-        $table .= $self->body_down($set);
+        $body .= $self->body_down($set);
     }
     elsif ($self->{defn_t}->{style} eq 'across') {
-        $table .= $self->body_across($set);
+        $body .= $self->body_across($set);
     }
     else {
         croak "[render] invalid style '$self->{defn_t}->{style}'";
     }
 
-    # End table
+    # Build table
+    my $table = '';
+    $table .= $self->pre_table();
+    $table .= $self->start_table();
+    $table .= $body;
     $table .= $self->end_table();
+    $table .= $self->post_table();
   
     return $table;
 }
@@ -1060,7 +1152,7 @@ sub render_table
 sub render
 {
     my ($self, $set, $defn) = @_;
-    croak "[render] invalid set '$set'" if ! ref $set;
+    $set = {} unless ref $set;
 
     # If $self is not blessed, this is a procedural call, $self is $set
     if (ref $self eq 'HASH' || ref $self eq 'ARRAY') {
@@ -1069,7 +1161,7 @@ sub render
       $self = __PACKAGE__->new($defn);
       undef $defn;
     }
-
+ 
     # If $defn defined, merge with $self->{defn} for this render only
     if (ref $defn eq 'HASH' && keys %$defn) {
         $defn = $self->merge($self->{defn}, $defn);
@@ -1319,6 +1411,34 @@ or eq ''). e.g.
 Scalar (boolean). If true, leading and trailing whitespace is removed
 from data values.
 
+=item title
+
+Scalar or hashref, defining a title rendered above the table. A scalar
+title is interpreted as the title string, and rendered as a vanilla 
+<h2> title. For more control use a hashref - it requires a member called
+'title' to contain the string, and will use a member called 'tag' instead
+of the default 'h2' tag; all other members are used as attributes for
+the tag e.g.
+
+  title => { title => 'Wundertable', tag => 'h3', class => 'blue',
+    align => 'center' }
+
+would be rendered as:
+
+  <h3 align="center" class="blue">Wundertable</h3>
+
+=item text
+
+Scalar, defining text to be included immediately before the table (but 
+after a title, if any). Included verbatim, except that it will be wrapped 
+in paragraph tags unless it begins and ends with '<' and '>' characters.
+
+=item caption
+
+Scalar, defining text to be included immediately after the table. Like 
+'text' above, it is included verbatim, except that it will be wrapped in 
+paragraph tags unless it begins and ends with '<' and '>' characters.
+
 =item field_attr
 
 Hashref, defining per-field attribute definitions. Three kinds of keys are 
@@ -1544,3 +1664,4 @@ same terms as perl itself.
 
 =cut
 
+# arch-tag: affab4f7-8dcb-4f32-86f4-ed77cb9e349d
