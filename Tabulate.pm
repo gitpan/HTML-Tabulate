@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.18';
+$VERSION = '0.19';
 my %DEFAULT_DEFN = (
     style => 'down', 
     table => {},
@@ -19,7 +19,7 @@ my %DEFAULT_DEFN = (
 );
 my %VALID_ARG = (
     table => 'HASH/SCALAR',
-    tr => 'HASH', 
+    tr => 'HASH/CODE', 
     thtr => 'HASH',
     th => 'HASH',
     td => 'HASH',
@@ -560,41 +560,64 @@ sub end_table
     return $self->end_tag('table') . "\n";
 }
 
+# Apply 'format' formatting
+sub cell_format_format
+{
+    my ($self, $data, $fattr, $row, $field) = @_;
+    my $ref = ref $fattr->{format};
+    croak "[cell_format] invalid '$field' format: $ref" if $ref && $ref ne 'CODE';
+    $data = &{$fattr->{format}}($data, $row || {}, $field) if $ref eq 'CODE';
+    $data = sprintf $fattr->{format}, $data if ! $ref;
+    return $data;
+}
+
+# Simple tag escaping
+sub cell_format_escape
+{
+    my ($self, $data) = @_;
+    $data =~ s/</&lt;/g;
+    $data =~ s/>/&gt;/g;
+    return $data;
+}
+
+# Link formatting
+sub cell_format_link
+{
+    my ($self, $data, $fattr, $row, $field, $data_unformatted) = @_;
+    my $ldata;
+    my $ref = ref $fattr->{link};
+    croak "[cell_format] invalid '$field' link: $ref"
+        if $ref && $ref ne 'CODE';
+    $ldata = &{$fattr->{link}}($data_unformatted, $row || {}, $field) 
+        if $ref eq 'CODE';
+    $ldata = sprintf $fattr->{link}, $data_unformatted 
+        if ! $ref;
+    $data = sprintf qq(<a href="%s">%s</a>), 
+        uri_escape($ldata, $URI_ESCAPE_CHARS), $data;
+     return $data;
+}
+
 #
 # Format the given data item using formatting field attributes (e.g. format, 
 #   link, escape etc.)
 #
 sub cell_format
 {
-    my ($self, $data, $fattr, $row, $field) = @_;
-    my $data_in = $data;
+    my $self = shift;
+    my ($data, $fattr, $row, $field) = @_;
+    my $data_unformatted = $data;
 
     # 'format' subroutine or sprintf pattern
-    if ($fattr->{format}) {
-        my $ref = ref $fattr->{format};
-        croak "[cell_format] invalid '$field' format: $ref"
-            if $ref && $ref ne 'CODE';
-        $data = &{$fattr->{format}}($data, $row || {}, $field) if $ref eq 'CODE';
-        $data = sprintf $fattr->{format}, $data if ! $ref;
-    }
+    $data = $self->cell_format_format(@_) 
+        if $fattr->{format};
 
     # 'escape' boolean for simple tag escaping (defaults to on)
-    if ($fattr->{escape} || ! exists $fattr->{escape}) {
-        $data =~ s/</&lt;/g;
-        $data =~ s/>/&gt;/g;
-    }
+    $data = $self->cell_format_escape($data) 
+        if $fattr->{escape} || ! exists $fattr->{escape};
 
     # 'link' subroutine or sprintf pattern
-    if ($fattr->{link}) {
-        my $ldata;
-        my $ref = ref $fattr->{link};
-        croak "[cell_format] invalid '$field' link: $ref"
-            if $ref && $ref ne 'CODE';
-        $ldata = &{$fattr->{link}}($data_in, $row || {}, $field) if $ref eq 'CODE';
-        $ldata = sprintf $fattr->{link}, $data_in if ! $ref;
-        $data = sprintf qq(<a href="%s">%s</a>), 
-            uri_escape($ldata, $URI_ESCAPE_CHARS), $data;
-    }
+    $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
+        if $fattr->{link};
 
     return $data;
 }
@@ -673,7 +696,17 @@ sub cell_merge_defaults
         $self->{defn_t}->{field_attr}->{$field} = $fattr;
     }
 
-    return ($fattr, \%tx_attr);
+    # Check %tx_attr for code values
+    my $tx_code = 0;
+    for my $v (values %tx_attr) {
+         if (ref $v eq 'CODE') {
+             $tx_code = 1;
+             $self->{defn_t}->{field_attr}->{$field}->{td_code} = 1 if $row;
+             last;
+         }
+    }
+
+    return ($fattr, \%tx_attr, $tx_code);
 }
 
 #
@@ -731,6 +764,20 @@ sub cell_tags
 }
 
 #
+# Execute any th or td attribute subrefs
+#
+sub cell_tx_execute 
+{
+    my $self = shift;
+    my ($tx_attr, $row) = @_;
+    my %tx2 = ();
+    while (my ($k,$v) = each %$tx_attr) {
+        $tx2{$k} = ref $v eq 'CODE' ? $v->($row) : $v;
+    }
+    return \%tx2;
+}
+
+#
 # Render a single table cell or item
 #
 sub cell 
@@ -738,15 +785,20 @@ sub cell
     my ($self, $row, $field, $fattr, $tx_attr) = @_;
 
     # Merge default and field attributes first time through (labels + data)
+    my $tx_code = 0;
     unless ($fattr && $tx_attr) {
         if (! defined $row || ! $self->{defn_t}->{field_attr}->{$field}->{td_attr}) {
-            ($fattr, $tx_attr) = $self->cell_merge_defaults($row, $field);
+            ($fattr, $tx_attr, $tx_code) = $self->cell_merge_defaults($row, $field);
         }
         else {
             $fattr = $self->{defn_t}->{field_attr}->{$field};
-            $tx_attr = $self->{defn_t}->{field_attr}->{$field}->{td_attr};
+            $tx_attr = $fattr->{td_attr};
+            $tx_code = $fattr->{td_code};
         }
     }
+
+    # If $tx_addr includes coderefs, execute them
+    $tx_attr = $self->cell_tx_execute($tx_attr, $row) if $tx_code;
 
     # Generate output
     my $out = $self->cell_content($row, $field, $fattr);
@@ -761,8 +813,9 @@ sub cell
 #
 sub stripe
 {
-    my ($self, $tr, $rownum, $stripe, $type) = @_;
-    return if $stripe eq '' || ref $tr ne 'HASH';
+    my ($self, $tr, $rownum) = @_;
+    my $stripe = $self->{defn_t}->{stripe};
+    return $tr unless $stripe;
              
     my $r = int($rownum % scalar(@$stripe)) - 1;
     if (defined $stripe->[$r]) {
@@ -785,31 +838,32 @@ sub stripe
         }
         # Else silently ignore
     }
+    return $tr;
 }
 
-# 
-# Setup a row stripe by modifying the 'tr' definition
 #
-sub row_stripe
+# Return an attribute hash for table rows
+#
+sub tr_attr
 {
-    my $self = shift;
-    my ($rownum) = @_;
+    my ($self, $rownum, $row) = @_;
     my $defn_t = $self->{defn_t};
-
-    # Table striping
-    $defn_t->{tr} = {} unless ref $defn_t->{tr} eq 'HASH';
-    my $tr;
+    my $tr = undef;
     if ($rownum == 0) {
-        $tr = $defn_t->{thtr};
-        $tr = $self->deepcopy($defn_t->{tr_base})
-            unless $tr;
+        $tr = $defn_t->{thtr} if $defn_t->{thtr};
+        $tr ||= $self->deepcopy($defn_t->{tr_base});
     }
     else {
-        $tr = $self->deepcopy($defn_t->{tr});
+        # Note that CODE TRs doesn't work for style => 'across' tables!!
+        if (ref $defn_t->{tr} eq 'CODE' && $row) {
+            $tr = $defn_t->{tr}->($row);
+        }
+        else {
+            $defn_t->{tr} = {} unless ref $defn_t->{tr} eq 'HASH';
+            $tr = $self->deepcopy($defn_t->{tr});
+        }
     }
-    $self->stripe($tr, $rownum, $defn_t->{stripe}, $defn_t->{stripe_type}) 
-        if $defn_t->{stripe};
-    return $tr;
+    return $self->stripe($tr, $rownum);
 }
 
 #
@@ -818,22 +872,18 @@ sub row_stripe
 sub row_down 
 {
     my ($self, $row, $rownum) = @_;
-    # Render row into $out
-    my $tr = $self->row_stripe($rownum);
-    my $out = '';
-    $out .= $self->start_tag('tr', $tr);
+    # Render cells
+    my @cells = ();
     for my $f (@{$self->{defn_t}->{fields}}) {
-        # Labels/headings
-        if ($rownum == 0) {
-            $out .= $self->cell(undef, $f);
-        }
-        # Data
-        else {
-            $out .= $self->cell($row, $f);
-        }
+        push @cells, $self->cell($rownum == 0 ? undef : $row, $f);
     }
+
+    # Build the row
+    my $out = $self->start_tag('tr', $self->tr_attr($rownum, $row));
+    $out .= join('',@cells);
     $out .= $self->end_tag('tr');
     $out .= "\n";
+    return $out;
 }
 
 #
@@ -903,21 +953,20 @@ sub body_down
 sub row_across
 {
     my ($self, $data, $rownum, $field) = @_;
-
-    # Begin row
-    my $tr = $self->row_stripe($rownum);
-    my $body = $self->start_tag('tr', $tr);
+    my @cells = ();
 
     # Label/heading
-    $body .= $self->cell(undef, $field) if $self->{defn_t}->{labels};
+    push @cells, $self->cell(undef, $field) if $self->{defn_t}->{labels};
 
     # Data
     for my $row (@$data) {
-        $body .= $self->cell($row, $field);
+        push @cells, $self->cell($row, $field);
     }
 
-    # End row
-    $body .= $self->end_tag('tr', $tr) . "\n";
+    # Build row
+    my $out = $self->start_tag('tr', $self->tr_attr($rownum));
+    $out .= join('', @cells);
+    $out .= $self->end_tag('tr') . "\n";
 }
 
 sub get_dataset
@@ -985,23 +1034,23 @@ sub render_table
     my ($self, $set) = @_;
 
     # Start table
-    my $out = $self->start_table();
+    my $table = $self->start_table();
 
     # Style-specific bodies (default is 'down')
     if ($self->{defn_t}->{style} eq 'down') {
-        $out .= $self->body_down($set);
+        $table .= $self->body_down($set);
     }
     elsif ($self->{defn_t}->{style} eq 'across') {
-        $out .= $self->body_across($set);
+        $table .= $self->body_across($set);
     }
     else {
         croak "[render] invalid style '$self->{defn_t}->{style}'";
     }
 
     # End table
-    $out .= $self->end_table();
+    $table .= $self->end_table();
   
-    return $out;
+    return $table;
 }
 
 #
