@@ -1,6 +1,6 @@
 # field attribute testing
 
-use Test::More tests => 2;
+use Test::More tests => 3;
 use HTML::Tabulate qw(render);
 use Data::Dumper;
 use strict;
@@ -21,6 +21,19 @@ for (readdir DATADIR) {
   close FILE;
 }
 close DATADIR;
+
+my $print = shift @ARGV || 0;
+my $n = 1;
+sub report {
+  my ($data, $file, $inc) = @_;
+  $inc ||= 1;
+  if ($print == $n) {
+    print STDERR "--> $file\n";
+    print $data;
+    exit 0;
+  }
+  $n += $inc;
+}
 
 # Procedural render
 my $data = [ [ '123', 'Fred Flintstone', 'CEO', '19710430', ], 
@@ -69,7 +82,7 @@ my $table = render($data, {
     },
   },
 });
-# print $table, "\n";
+report $table, "render1";
 is($table, $result{render1}, "render1 result ok");
 
 
@@ -113,9 +126,24 @@ $table = $t->render($data, {
     },
   },
 });
-# print $table, "\n";
+report $table, "render2";
 is($table, $result{render2}, "render2 result ok");
 
+
+# Test merge order
+$t = HTML::Tabulate->new({
+  field_attr => {
+    -defaults => { class => 'default' },
+    qr/create/ => { class => 'create' },
+    prod_create_ts => { class => 'prod_create_ts' },
+  },
+});
+$table = $t->render($data, {
+  fields => [ qw(prod_id prod_name prod_create_uid prod_create_ts) ],
+  labels => 1,
+});
+report $table, "render3";
+is($table, $result{render3}, "render3 result ok");
 
 
 # arch-tag: 4571e9c8-fbae-4494-8357-4fdc862ca827

@@ -4,18 +4,21 @@ use 5.005;
 use Carp;
 use URI::Escape;
 use strict;
-use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
+use vars qw($VERSION @ISA @EXPORT @EXPORT_OK $TITLE_HEADING_LEVEL);
 
 require Exporter;
 @ISA = qw(Exporter);
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.20';
+$VERSION = '0.21';
 my %DEFAULT_DEFN = (
-    style => 'down', 
-    table => {},
-    field_attr => { -defaults => {}, },
+    style       => 'down', 
+    table       => {},
+    title       => { format => "<h2>%s</h2>\n" },
+    text        => { format => "<p>%s</p>\n" },
+    caption     => { format => "<p>%s</p>\n" },
+    field_attr  => { -defaults => {}, },
 );
 my %VALID_ARG = (
     table => 'HASH/SCALAR',
@@ -41,11 +44,11 @@ my %VALID_ARG = (
     # xhtml: boolean indicating whether to use xhtml-style tagging
     xhtml => 'SCALAR',
     # title: title/heading to be rendered above table
-    title => 'SCALAR/HASH',
+    title => 'SCALAR/HASH/CODE',
     # text: text to be rendered above table, after title
-    text => 'SCALAR',
+    text => 'SCALAR/HASH/CODE',
     # caption: text to be rendered below table
-    caption => 'SCALAR',
+    caption => 'SCALAR/HASH/CODE',
 );
 my %VALID_FIELDS = (
     -defaults => 'HASH',
@@ -61,7 +64,7 @@ my %FIELD_ATTR = (
     label_escape => 'SCALAR',
 );
 my $URI_ESCAPE_CHARS = "^A-Za-z0-9\-_.!~*'()?&;:/=";
-our $TITLE_HEADING_LEVEL = 'h2';
+$TITLE_HEADING_LEVEL = 'h2';   # TODO: deprecated
 
 # -------------------------------------------------------------------------
 # Provided for subclassing
@@ -558,66 +561,100 @@ sub end_tag
 # ------------------------------------------------------------------------
 # Pre- and post-table content
 
-# title: title/heading labelling the table. 
-#   If scalar, rendered in $TITLE_HEADING_LEVEL tags.
-#   If hashref, rendered using hashref keys as attributes, with text taken
-#     from 'title' attribute, and 'tag' attribute overriding 
-#     $TITLE_HEADING_LEVEL
-sub title
+# Title, text, and caption elements may be:
+#   - hashref, containing 'value' (scalar) and 'format' (scalar or subref)
+#     elements that are rendered like table cells
+#   - scalar, that is treated as a scalar 'value' as above with a default 
+#     'format'
+#   - subref, that is executed and the results used verbatim (i.e. no default
+#     'format' applies
+sub text_element
 {
     my $self = shift;
-    my $title = $self->{defn_t}->{title};
-    if (ref $title eq 'HASH') {
-        my $text = $title->{title};
-        return '' unless $text;
-        my $tag = $title->{tag} || $TITLE_HEADING_LEVEL;
-        delete $title->{tag};
-        delete $title->{title};
-        return $self->start_tag($tag, $title) . $text .
-               $self->end_tag($tag, $title) . "\n";
+    my ($type, $dataset) = @_;
+    return '' unless grep /^$type$/, qw(title text caption);
+
+    my $elt = $self->{defn_t}->{$type};
+
+    # Subref - execute and return results
+    if (ref $elt eq 'CODE') {
+        return $elt->($dataset, $type);
     }
-    else {
-        return $self->start_tag($TITLE_HEADING_LEVEL) . $title . 
-               $self->end_tag($TITLE_HEADING_LEVEL) . "\n";
+
+    # Scalar - convert to hashref
+    elsif (! ref $elt) {
+        my $value = $elt;
+        $elt = {};
+        # If there's a DEFAULT_DEFN $elt entry, use that as defaults
+        if ($DEFAULT_DEFN{$type} && ref $DEFAULT_DEFN{$type} eq 'HASH') {
+            $elt = { %{$DEFAULT_DEFN{$type}} };
+        }
+        $elt->{value} = $value;
     }
+
+    # Hashref - render and return
+    if (ref $elt eq 'HASH') {
+        return '' unless defined $elt->{value} or defined $elt->{title};
+
+        # Omit formatting if tag-wrapped
+        return $elt->{value}
+            if defined $elt->{value} && $elt->{value} =~ m/^\s*\<.*\>\s*$/s;
+        return $elt->{title} 
+            if defined $elt->{title} && $elt->{title} =~ m/^\s*\<.*\>\s*$/s;
+
+        # sprintf format pattern
+        return sprintf $elt->{format}, $elt->{value}
+            if defined $elt->{value} && defined $elt->{format} && 
+                ! ref $elt->{format};
+
+        # subref format pattern
+        return $elt->{format}->($elt->{value}, $dataset, $type)
+            if defined $elt->{value} && defined $elt->{format} && 
+                ref $elt->{format} eq 'CODE';
+        
+        # Deprecated formatting style
+        if ($elt->{title}) {
+            my $title = $elt->{title};
+            my $tag = $elt->{tag} || 'h2';
+            delete $elt->{title};
+            delete $elt->{tag};
+            delete $elt->{format};
+            return $self->start_tag($tag, $elt) . $title .
+                   $self->end_tag($tag, $elt) . "\n";
+        }
+
+        # fallthru: return 'value'
+        return $elt->{value};
+    }
+
+    return '';
 }
 
-# text: text preceding being table tag (after title, if any)
-sub text
+# unchomp: ensure (non-empty) elements end with a newline
+sub unchomp
 {
     my $self = shift;
-    my $text = $self->{defn_t}->{text};
-    chomp $text;
-
-    # Use text verbatim if already wrapped in tags
-    return "$text\n" if $text =~ m/^<.*>$/s;
-
-    # Otherwise wrap in paragraph tags
-    return "<p>$text</p>\n";
+    my $data = shift;
+    $data .= "\n" if defined $data && $data ne '' && substr($data,-1) ne "\n";
+    $data
 }
 
+# title: title/heading preceding the table
+sub title   { my $self = shift; $self->unchomp($self->text_element('title', @_)) }
+# text: text preceding begin table tag (after title, if any)
+sub text    { my $self = shift; $self->unchomp($self->text_element('text', @_)) }
 # caption: text following end table tag
-sub caption
-{
-    my $self = shift;
-    my $text = $self->{defn_t}->{caption};
-    chomp $text;
-
-    # Use text verbatim if already wrapped in tags
-    return "$text\n" if $text =~ m/^<.*>$/s;
-
-    # Otherwise wrap in paragraph tags
-    return "<p>$text</p>\n";
-}
+sub caption { my $self = shift; $self->unchomp($self->text_element('caption', @_)) }
 
 # ------------------------------------------------------------------------
 # Content before begin table tag
 sub pre_table
 {
     my $self = shift;
+    my ($set) = @_;
     my $content = '';
-    $content .= $self->title if $self->{defn_t}->{title};
-    $content .= $self->text  if $self->{defn_t}->{text};
+    $content .= $self->title($set) if $self->{defn_t}->{title};
+    $content .= $self->text($set)  if $self->{defn_t}->{text};
     return $content;
 }
 
@@ -641,8 +678,9 @@ sub end_table
 sub post_table
 {
     my $self = shift;
+    my ($set) = @_;
     my $content = '';
-    $content .= $self->caption if $self->{defn_t}->{caption};
+    $content .= $self->caption($set) if $self->{defn_t}->{caption};
     return $content;
 }
 
@@ -692,19 +730,29 @@ sub cell_format
 {
     my $self = shift;
     my ($data, $fattr, $row, $field) = @_;
-    my $data_unformatted = $data;
+    my $defn = $self->{defn_t};
 
-    # 'escape' boolean for simple tag escaping (defaults to on)
-    $data = $self->cell_format_escape($data) 
-        if $fattr->{escape} || ! exists $fattr->{escape};
+    # Trim
+    $data =~ s/^\s*(.*?)\s*$/$1/ if $defn->{trim};
 
-    # 'format' subroutine or sprintf pattern
-    $data = $self->cell_format_format(@_) 
-        if $fattr->{format};
+    if ($data ne '') {
+        my $data_unformatted = $data;
 
-    # 'link' subroutine or sprintf pattern
-    $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
-        if $fattr->{link};
+        # 'escape' boolean for simple tag escaping (defaults to on)
+        $data = $self->cell_format_escape($data) 
+            if $fattr->{escape} || ! exists $fattr->{escape};
+
+        # 'format' subroutine or sprintf pattern
+        $data = $self->cell_format_format(@_) 
+            if $fattr->{format};
+
+        # 'link' subroutine or sprintf pattern
+        $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
+            if $fattr->{link};
+    }
+
+    # 'null' defaults
+    $data = $defn->{null} if defined $defn->{null} && $data eq '';
 
     return $data;
 }
@@ -721,7 +769,8 @@ sub label
     else {
         $l = $label;
     }
-    $l ||= $self->derive_label($field);
+    $l = $self->derive_label($field) unless defined $l;
+    $l = $self->{defn_t}->{null} if $l eq '' && defined $self->{defn_t}->{null};
     return $l;
 }
 
@@ -799,9 +848,10 @@ sub cell_merge_defaults
 #
 # Set and format the data for a single (data) cell or item
 #
-sub cell_content
+sub cell_value
 {
-    my ($self, $row, $field, $fattr) = @_;
+    my $self = shift;
+    my ($row, $field, $fattr) = @_;
     my $defn = $self->{defn_t};
 
     # Get value from $row
@@ -824,18 +874,27 @@ sub cell_content
             $value = &{$fattr->{value}}($value, $row, $field);
         }
         else {
-            croak "[cell_content] invalid '$field' value: $ref";
+            croak "[cell_value] invalid '$field' value: $ref";
         };
     }
 
+    return defined $value ? $value : '';
+}
+
+#
+# Set and format the data for a single (data) cell or item
+#
+sub cell_content
+{
+    my $self = shift;
+    my ($row, $field, $fattr) = @_;
+    my $defn = $self->{defn_t};
+
+    # Get value from $row
+    my $value = $self->cell_value(@_);
+
     # Format
-    my $fvalue = $value;
-    $fvalue = '' if ! defined $fvalue;
-    $fvalue =~ s/^\s*(.*?)\s*$/$1/ if $defn->{trim};
-    $fvalue = $self->cell_format($fvalue, $fattr, $row, $field) 
-        if defined $fvalue && $fvalue ne '';
-    $fvalue = $defn->{null} 
-        if defined $defn->{null} && $fvalue eq '';
+    my $fvalue = $self->cell_format($value, $fattr, $row, $field);
 
     return wantarray ? ($fvalue, $value) : $fvalue;
 }
@@ -1136,11 +1195,11 @@ sub render_table
 
     # Build table
     my $table = '';
-    $table .= $self->pre_table();
+    $table .= $self->pre_table($set);
     $table .= $self->start_table();
     $table .= $body;
     $table .= $self->end_table();
-    $table .= $self->post_table();
+    $table .= $self->post_table($set);
   
     return $table;
 }
@@ -1173,6 +1232,8 @@ sub render
 
     $self->render_table($set);
 }
+
+# -------------------------------------------------------------------------
 
 1;
 
@@ -1411,41 +1472,13 @@ or eq ''). e.g.
 Scalar (boolean). If true, leading and trailing whitespace is removed
 from data values.
 
-=item title
-
-Scalar or hashref, defining a title rendered above the table. A scalar
-title is interpreted as the title string, and rendered as a vanilla 
-<h2> title. For more control use a hashref - it requires a member called
-'title' to contain the string, and will use a member called 'tag' instead
-of the default 'h2' tag; all other members are used as attributes for
-the tag e.g.
-
-  title => { title => 'Wundertable', tag => 'h3', class => 'blue',
-    align => 'center' }
-
-would be rendered as:
-
-  <h3 align="center" class="blue">Wundertable</h3>
-
-=item text
-
-Scalar, defining text to be included immediately before the table (but 
-after a title, if any). Included verbatim, except that it will be wrapped 
-in paragraph tags unless it begins and ends with '<' and '>' characters.
-
-=item caption
-
-Scalar, defining text to be included immediately after the table. Like 
-'text' above, it is included verbatim, except that it will be wrapped in 
-paragraph tags unless it begins and ends with '<' and '>' characters.
-
 =item field_attr
 
 Hashref, defining per-field attribute definitions. Three kinds of keys are 
 supported: the special value '-defaults', used to define defaults for all
-fields; qr() regular expresssions, used as defaults if the regex matches
-the field name; and simple field names. These are merged in the order
-given, allowing defaults to be defined for all fields, overridden for fields
+fields; qr() regular expressions, used as defaults if the regex matches
+the field name; and simple field names. These are always merged in that 
+order, allowing defaults to be defined for all fields, overridden for fields
 matching particular regexes, and then overridden further per-field. e.g.
 
   # Align all fields left except timestamps (*_ts)
@@ -1456,6 +1489,61 @@ matching particular regexes, and then overridden further per-field. e.g.
   },
 
 Field attribute arguments are discussed in the following section.
+
+=item title
+
+Scalar, hashref, or subroutine reference, defining a title rendered above 
+the table. A scalar title is interpreted as the title string, and rendered 
+as a vanilla <h2> title (use hashref or subref variants for more control).
+A hashref title can contains 'value' and 'format' elements - 'value' is a
+scalar containing the title string, and 'format' is a scalar sprintf 
+pattern (default: '<p>%s</p>') used to render the title value, or a subref
+called with the following arguments:
+
+    $format->($value, $dataset, $type)
+
+(where $type is 'title') and should return the formatted title string to 
+be used.
+
+Subref titles are similar, except there is no separate title string involved;
+they are called with the following arguments:
+
+    $title->($dataset, $type);
+
+(where $type is 'title') and should return the formatted title string to 
+be used.
+
+Examples:
+ 
+    # rendered: <h2>Employee Foo</h2>
+    title => 'Employee Foo'
+    # rendered: <h3 class="red_white_blue">Employee Foo</h3>
+    title => {
+        value => 'Employee Foo',
+        format => '<h3 class="red_white_blue">%s</h3>',
+    }
+    # rendered (e.g.): <h2>Employee Foo (3 records)</h2>
+    title => sub {
+        my ($set, $type) = @_;
+        my $title = 'Employee Foo';
+        $title .= ' (' . scalar(@$set) . ' records)'
+            if ref $set eq 'ARRAY';
+        sprintf '<h2>%s</h2>', $title;
+    }
+
+=item text
+
+Scalar, hashref, or subroutine reference, defining text to be included 
+immediately before the table (but after a 'title', if any). Treated
+exactly like 'title' above, except that the $type argument passed to 
+subrefs is 'text', and the default format defined is '<p>%s</p>'.
+
+=item caption
+
+Scalar, hashref, or subroutine reference, defining text to be included 
+immediately after the table. Treated exactly like 'title' above, except 
+that the $type argument passed to subrefs is 'caption', and the default 
+format defined is '<p>%s</p>'.
 
 =back
 
