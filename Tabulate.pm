@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.21';
+$VERSION = '0.22';
 my %DEFAULT_DEFN = (
     style       => 'down', 
     table       => {},
@@ -226,7 +226,7 @@ sub merge
         delete $self->{defn_t} if exists $self->{defn_t};
     }
     else {
-        return $merge 
+        return $merge;
     }
 }
 
@@ -860,7 +860,11 @@ sub cell_value
         my $i = keys %{$defn->{field_map}} ? $defn->{field_map}->{$field} : $field;
         $value = $row->[ $i ] if defined $i;
     }
-    elsif (ref $row) {
+    # Allow field-methods e.g. Class::DBI
+    elsif (ref $row && ref $row ne 'HASH' && ref $row ne 'SCALAR' && $row->can($field)) {
+        $value = eval "\$row->$field()";
+    }
+    elsif (ref $row && exists $row->{$field}) {
         $value = $row->{$field};
     }
     # 'value' literal or subref takes precedence over row
@@ -1475,11 +1479,29 @@ from data values.
 =item field_attr
 
 Hashref, defining per-field attribute definitions. Three kinds of keys are 
-supported: the special value '-defaults', used to define defaults for all
-fields; qr() regular expressions, used as defaults if the regex matches
-the field name; and simple field names. These are always merged in that 
-order, allowing defaults to be defined for all fields, overridden for fields
-matching particular regexes, and then overridden further per-field. e.g.
+supported: 
+
+=over 4
+
+=item -defaults
+
+The special literal '-defaults' is used to define defaults for all fields
+(but can be overridden by more specific definitions).
+
+=item qr() regular expressions
+
+qr-quoted regular expressions are used as defaults for fields where the 
+regex matches the field name.
+
+=item field names
+
+Simple field names define attributes just for that field.
+
+=back
+
+These are always merged in the order above, allowing defaults to be 
+defined for all fields, overridden for fields matching particular 
+regexes, and then overridden further per-field. e.g.
 
   # Align all fields left except timestamps (*_ts)
   field_attr => {
@@ -1637,7 +1659,8 @@ label entries.
 Scalar or subroutine reference. Equivalent to the general 'link'
 argument above, but used to create link targets only for label/heading 
 rows. Scalar values are taken as sprintf patterns; subroutine references
-are called with the data item and the row as the two arguments.
+are called in the same way as the value subref above i.e. 
+$link->($data_item, $row, $field)
 
 
 =item escape
@@ -1724,11 +1747,34 @@ Some kinds of iterators (pointer objects used to access the members
 of a set) are also supported. If the iterator supports methods called
 First() and Next() or first() and next() then HTML::Tabulate will use
 those methods to walk the dataset. DBIx::Recordset objects and 
-Class::DBI iterators definitely work; beyond those your kilometerage
+Class::DBI iterators definitely work; beyond those your mileage
 may vary - please let me know your successes and failures.
 
-
 =back
+
+=head1 SUBCLASSING
+
+HTML::Tabulate is intended to be easy to subclass, to allow you to 
+setup sensible defaults for site-wide use, for instance. Something
+like this seems to work well:
+
+    package My::Tabulate;
+    use base qw(HTML::Tabulate);
+
+    sub new {
+        my $class = shift;
+        my $defn = shift || {};
+        my %defaults = (
+            # define table defaults here e.g.
+            table => { border => 1 },
+            labels => { foo => 'FOO', bar => 'BAR' },
+        );
+        my $self = $class->SUPER::new(\%defaults);
+        $self->merge($defn);
+        return $self;
+    }
+
+    1;
 
 
 =head1 BUGS AND CAVEATS
@@ -1745,7 +1791,7 @@ Gavin Carr <gavin@openfusion.com.au>
 
 =head1 COPYRIGHT
 
-Copyright 2003, Gavin Carr. All Rights Reserved.
+Copyright 2003-2005, Gavin Carr. All Rights Reserved.
 
 This program is free software. You may copy or redistribute it under the 
 same terms as perl itself.

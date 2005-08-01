@@ -2,6 +2,79 @@
 # arch-tag: automatic-ChangeLog--gavin@openfusion.com.au--public-2004/cpan--tabulate--0
 #
 
+2005-07-22 01:30:39 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-19
+
+    Summary:
+      Update subclassing docs to correct merging problem.
+    Revision:
+      cpan--tabulate--0--patch-19
+
+    Update subclassing docs to correct merging problem.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2005-07-20 22:31:28 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-18
+
+    Summary:
+      Expand docs on field-attribute keys slightly.
+    Revision:
+      cpan--tabulate--0--patch-18
+
+    Expand docs on field-attribute keys slightly.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2005-07-20 03:33:14 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-17
+
+    Summary:
+      Correct error with label_link docs.
+    Revision:
+      cpan--tabulate--0--patch-17
+
+    Correct error with label_link docs.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2005-07-19 22:54:53 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-16
+
+    Summary:
+      Add some docs on subclassing.
+    Revision:
+      cpan--tabulate--0--patch-16
+
+    Add some docs on subclassing.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2005-07-19 12:00:57 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-15
+
+    Summary:
+      Support method-based values e.g. Class::DBI; up version to 0.22.
+    Revision:
+      cpan--tabulate--0--patch-15
+
+    Support method-based values e.g. Class::DBI; up version to 0.22.
+    
+
+    new files:
+     t/t6/.arch-ids/render3.id t/t6/render3
+
+    modified files:
+     Changes Tabulate.pm
+
+
 2004-06-24 05:21:43 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-14
 
     Summary:
