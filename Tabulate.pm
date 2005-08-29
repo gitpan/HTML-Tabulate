@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.22';
+$VERSION = '0.23';
 my %DEFAULT_DEFN = (
     style       => 'down', 
     table       => {},
@@ -718,7 +718,7 @@ sub cell_format_link
     $ldata = sprintf $fattr->{link}, $data_unformatted 
         if ! $ref;
     $data = sprintf qq(<a href="%s">%s</a>), 
-        uri_escape($ldata, $URI_ESCAPE_CHARS), $data;
+        uri_escape($ldata, $URI_ESCAPE_CHARS), $data if $ldata;
      return $data;
 }
 

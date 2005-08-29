@@ -2,6 +2,23 @@
 # arch-tag: automatic-ChangeLog--gavin@openfusion.com.au--public-2004/cpan--tabulate--0
 #
 
+2005-08-23 07:16:46 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-20
+
+    Summary:
+      Add test to cell_format_link to check link is set (suggested by Gordon Rowell).
+    Revision:
+      cpan--tabulate--0--patch-20
+
+    Add test to cell_format_link to check link is set (suggested by Gordon Rowell).
+    
+
+    new files:
+     t/t5/.arch-ids/render4.id t/t5/render4
+
+    modified files:
+     Changes MANIFEST Tabulate.pm t/05_attr.t
+
+
 2005-07-22 01:30:39 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-19
 
     Summary:

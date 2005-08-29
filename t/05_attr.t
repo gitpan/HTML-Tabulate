@@ -1,6 +1,6 @@
 # attribute testing - test an example of every type of attribute argument
 
-use Test::More tests => 3;
+use Test::More tests => 4;
 use HTML::Tabulate qw(render);
 use Data::Dumper;
 use strict;
@@ -72,6 +72,31 @@ $table = render($data, {
 });
 # print $table, "\n";
 is($table, $result{render3}, "render3 result ok");
+
+
+# Render4 - test empty links
+$table = render($data, {
+  fields => [ qw(emp_id emp_name delete) ],
+  field_attr => {
+    delete => { 
+      value => sub {
+        my ($data, $row, $field) = @_;
+        if (length $row->[2] <= 3) {
+          return 'delete'; 
+        }
+      }, 
+      link => sub {
+        my ($data, $row, $field) = @_;
+        if (length $row->[2] <= 3) {
+          return "delete.html?id=" . $row->[0];
+        }
+      },
+    },
+  },
+});
+# print $table, "\n";
+is($table, $result{render4}, "render4 result ok");
+
 
 # arch-tag: 829128bb-13d0-4343-adb2-d12c58059a64
 
