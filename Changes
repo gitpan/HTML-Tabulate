@@ -2,6 +2,58 @@
 # arch-tag: automatic-ChangeLog--gavin@openfusion.com.au--public-2004/cpan--tabulate--0
 #
 
+2005-09-21 22:48:10 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-23
+
+    Summary:
+      Add support for subref links_ attributes; add label_link tests/docs.
+    Revision:
+      cpan--tabulate--0--patch-23
+
+    Add support for subref links_ attributes; add label_link tests/docs.
+    
+
+    new files:
+     t/t17/.arch-ids/links2.id t/t17/links2
+
+    modified files:
+     Changes MANIFEST Tabulate.pm t/17_links.t
+
+
+2005-09-21 22:05:38 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-22
+
+    Summary:
+      Update MANIFEST for version 0.24.
+    Revision:
+      cpan--tabulate--0--patch-22
+
+    Update MANIFEST for version 0.24.
+    
+
+    modified files:
+     Changes MANIFEST
+
+
+2005-09-21 22:03:53 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-21
+
+    Summary:
+      Add support for link_* field attributes.
+    Revision:
+      cpan--tabulate--0--patch-21
+
+    Add support for link_* field attributes.
+    
+
+    new files:
+     t/17_links.t t/t17/.arch-ids/=id t/t17/.arch-ids/links1.id
+     t/t17/links1
+
+    modified files:
+     Changes EXCLUDE TODO Tabulate.pm {arch}/=tagging-method
+
+    new directories:
+     t/t17 t/t17/.arch-ids
+
+
 2005-08-23 07:16:46 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-20
 
     Summary:

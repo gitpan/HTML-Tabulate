@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.23';
+$VERSION = '0.24';
 my %DEFAULT_DEFN = (
     style       => 'down', 
     table       => {},
@@ -717,9 +717,22 @@ sub cell_format_link
         if $ref eq 'CODE';
     $ldata = sprintf $fattr->{link}, $data_unformatted 
         if ! $ref;
-    $data = sprintf qq(<a href="%s">%s</a>), 
-        uri_escape($ldata, $URI_ESCAPE_CHARS), $data if $ldata;
-     return $data;
+    if ($ldata) {
+#       $data = sprintf qq(<a href="%s">%s</a>), 
+#           uri_escape($ldata, $URI_ESCAPE_CHARS), $data;
+        my $link_attr = { href => uri_escape($ldata, $URI_ESCAPE_CHARS)};
+        for my $attr (keys %$fattr) {
+          if ($attr =~ m/^link_/) {
+            my $val = $fattr->{$attr};
+            $attr =~ s/^link_//;
+            $link_attr->{$attr} = ref $val eq 'CODE' ? 
+              $val->($data_unformatted, $row || {}, $field) :
+              $val;
+          }
+        }
+        $data = $self->start_tag('a', $link_attr) . $data . $self->end_tag('a');
+    }
+    return $data;
 }
 
 #
@@ -824,7 +837,10 @@ sub cell_merge_defaults
 
     # Create tx_attr by removing all $fattr attributes in $field_attr
     my %tx_attr = %$fattr;
-    for (keys %tx_attr) { delete $tx_attr{$_} if exists $self->{field_attr}->{$_} }
+    for (keys %tx_attr) { 
+      delete $tx_attr{$_} if exists $self->{field_attr}->{$_};
+      delete $tx_attr{$_} if m/^link_/;
+    }
 
     # If data, save for subsequent rows
     if ($row) {
@@ -1276,6 +1292,7 @@ HTML::Tabulate - HTML table rendering class
             emp_id => {
                 format => '%-05d',
                 link => "emp.html?id=%s",
+                link_target => '_blank',
                 align => 'right',
             },
             # upper all names
@@ -1633,7 +1650,7 @@ described above i.e. $link->($data_item, $row, $field) e.g.
     emp_id => {
       link => 'emp.html?id=%s',
       format => '%05d',
-    }
+    },
   }
 
 creates a link in the table cell like:
@@ -1642,6 +1659,28 @@ creates a link in the table cell like:
 
 Note that links are not created for labels/headings - to do so use the 
 separate label_link argument below.
+
+
+=item link_*
+
+Scalar or subroutine reference. Any attribute beginning with 'link_' is 
+used as an attribute for the HTML link created for this field (with the
+'link_' prefix removed, of course). Scalar values are used as literals; 
+subroutine references are called in the same way as the value subref 
+above i.e. $attr->($data_item, $row, $field) e.g.
+
+  field_attr => {
+    emp_id => {
+      link => 'emp.html?id=%s',
+      link_class => sub { my ($d, $r, $f) = @_; "class_$f" },
+      link_target => '_blank',
+      link_title => 'Employee details',
+    },
+  }
+
+creates a link in the table cell like:
+
+  <a class="class_emp_id" href="emp.html?id=123" target="_blank" title="Employee details">123</a>
 
 
 =item label
@@ -1658,9 +1697,31 @@ label entries.
 
 Scalar or subroutine reference. Equivalent to the general 'link'
 argument above, but used to create link targets only for label/heading 
-rows. Scalar values are taken as sprintf patterns; subroutine references
-are called in the same way as the value subref above i.e. 
-$link->($data_item, $row, $field)
+rows. Scalar values are taken as sprintf patterns using the label as 
+argument; subroutine references are called in the same way as the value 
+subref above i.e. $link->($data_item, $row, $field)
+
+
+=item label_link_*
+
+Scalar or subroutine reference. Like 'link_*' attributes above, used as
+attributes on the HTML link created for the label for this field. 
+Scalar values are used as literals; subroutine references are called in 
+the same way as the value subref above i.e. $attr->($data_item, $row, 
+$field) e.g.
+
+  field_attr => {
+    emp_id => {
+      label => 'Emp ID',
+      label_link => sub { my ($d, $r, $f) = @_; "?order=$f" },
+      label_link_target => '_blank',
+      label_link_title => sub { my ($d, $r, $f) = @_; "Order by $d" },
+    },
+  }
+
+creates a link for the label like:
+
+  <a href="?order=emp_id" target="_blank" title="Order by Emp ID">Emp ID</a>
 
 
 =item escape
