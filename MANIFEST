@@ -22,8 +22,9 @@ t/t1/fredbarney
 t/t10/render1
 t/t10/render2
 t/t11/render1
-t/t12/td1
-t/t12/tr1
+t/t12/fattrsub1
+t/t12/thtdsub
+t/t12/trsub
 t/t13/title1
 t/t13/title2
 t/t13/title3

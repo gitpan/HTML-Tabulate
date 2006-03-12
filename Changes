@@ -2,6 +2,33 @@
 # arch-tag: automatic-ChangeLog--gavin@openfusion.com.au--public-2004/cpan--tabulate--0
 #
 
+2006-03-12 11:26:14 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-24
+
+    Summary:
+      Change "td" and field attribute subrefs to use standard ($d,$r,$f) func sig; up to version 0.25.
+    Revision:
+      cpan--tabulate--0--patch-24
+
+    Change "td" and field attribute subrefs to use standard ($d,$r,$f) func sig; up to version 0.25.
+    
+
+    new files:
+     t/t12/.arch-ids/thtdsub.id t/t12/thtdsub
+
+    modified files:
+     Changes Tabulate.pm t/12_trtd.t
+
+    renamed files:
+     t/t12/.arch-ids/td1.id
+       ==> t/t12/.arch-ids/fattrsub1.id
+     t/t12/.arch-ids/tr1.id
+       ==> t/t12/.arch-ids/trsub.id
+     t/t12/td1
+       ==> t/t12/fattrsub1
+     t/t12/tr1
+       ==> t/t12/trsub
+
+
 2005-09-21 22:48:10 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-23
 
     Summary:

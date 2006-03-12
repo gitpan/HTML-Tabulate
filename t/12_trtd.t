@@ -1,7 +1,7 @@
 # tr/td coderef testing
 
-use Test::More tests => 2;
-use HTML::Tabulate 0.19;
+use Test::More tests => 3;
+use HTML::Tabulate 0.25;
 use Data::Dumper;
 use strict;
 
@@ -22,28 +22,57 @@ for (readdir DATADIR) {
 }
 close DATADIR;
 
-# tr1
+my $print = shift @ARGV || 0;
+my $n = 1;
+sub report {
+  my ($data, $file, $inc) = @_;
+  $inc ||= 1;
+  if ($print == $n) {
+    print STDERR "--> $file\n";
+    print $data;
+    exit 0;
+  }
+  $n += $inc;
+}
+
+# Setup
 my $data = [ [ '123', 'Fred Flintstone', 'CEO', '19710430', ], 
              [ '456', 'Barney Rubble', 'Lackey', '19750808', ],
              [ '789', 'Dino', 'Pet' ] ];
-my $t = HTML::Tabulate->new;
-my $table = $t->render($data, {
+my $t = HTML::Tabulate->new({
   fields => [ qw(emp_id emp_name emp_title emp_birth_dt) ],
+});
+my $table;
+
+# tr sub
+$table = $t->render($data, {
   tr => sub { my $r = shift; my $name = lc $r->[1]; $name =~ s! .*!!; { class => $name } },
 });
-# print $table, "\n";
-is($table, $result{tr1}, "tr sub");
+report $table, "trsub";
+is($table, $result{trsub}, "tr sub");
 
-# td1
+# th/td sub
 $table = $t->render($data, {
-  fields => [ qw(emp_id emp_name emp_title emp_birth_dt) ],
-  td => { class => 'td' },
-  field_attr => {
-    emp_id => { class => sub { my $r = shift; reverse $r->[0] } },
-    emp_name => { class => sub { my $r = shift; lc $r->[2] eq 'ceo' ? 'red' : 'green' } },
+  labels => 1,
+  th => {
+    class => sub { my ($d, $r, $f) = @_; $d =~ s/^Emp //; $d =~ s/\s+/_/g; lc $d },
+  },
+  td => { 
+    class => sub { my ($d, $r, $f) = @_; my $class = ($d =~ m/^\d+$/ ? 'digits' : 'alpha'); $class },
   },
 });
-# print $table, "\n";
-is($table, $result{td1}, "td sub");
+report $table, "thtdsub";
+is($table, $result{thtdsub}, "th/td sub");
+
+# fattr sub1
+$table = $t->render($data, {
+  td => { class => 'td' },
+  field_attr => {
+    emp_id => { class => sub { my ($d, $r, $f) = @_; reverse $r->[0] } },
+    emp_name => { class => sub { my ($d, $r, $f) = @_; lc $r->[2] eq 'ceo' ? 'red' : 'green' } },
+  },
+});
+report $table, "fattrsub1";
+is($table, $result{fattrsub1}, "fattr sub1");
 
 # arch-tag: f26ad97a-f2aa-4e19-b5d1-f970146c5038

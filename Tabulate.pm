@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.24';
+$VERSION = '0.25';
 my %DEFAULT_DEFN = (
     style       => 'down', 
     table       => {},
@@ -908,7 +908,6 @@ sub cell_content
 {
     my $self = shift;
     my ($row, $field, $fattr) = @_;
-    my $defn = $self->{defn_t};
 
     # Get value from $row
     my $value = $self->cell_value(@_);
@@ -937,10 +936,11 @@ sub cell_tags
 sub cell_tx_execute 
 {
     my $self = shift;
-    my ($tx_attr, $row) = @_;
+    my ($tx_attr, $value, $row, $field) = @_;
     my %tx2 = ();
     while (my ($k,$v) = each %$tx_attr) {
-        $tx2{$k} = ref $v eq 'CODE' ? $v->($row) : $v;
+        # FIXME: this should be $v->($data, $row, $field)
+        $tx2{$k} = ref $v eq 'CODE' ? $v->($value, $row, $field) : $v;
     }
     return \%tx2;
 }
@@ -965,12 +965,15 @@ sub cell
         }
     }
 
-    # If $tx_addr includes coderefs, execute them
-    $tx_attr = $self->cell_tx_execute($tx_attr, $row) if $tx_code;
-
     # Generate output
-    my $out = $self->cell_content($row, $field, $fattr);
-    return $self->cell_tags($out, $row, $field, $tx_attr);
+    my ($fvalue, $value) = $self->cell_content($row, $field, $fattr);
+
+    # If $tx_addr includes coderefs, execute them
+    $tx_attr = $self->cell_tx_execute($tx_attr, $value, $row, $field) 
+        if $tx_code;
+
+    # Generate tags
+    return $self->cell_tags($fvalue, $row, $field, $tx_attr);
 }
 
 #
@@ -1286,7 +1289,7 @@ HTML::Tabulate - HTML table rendering class
 
     # Setup some dataset specific settings
     $table_defn2 = {
-        fields => [ qw(emp_id name title edit) ],
+        fields => [ qw(emp_id name title edit new_flag) ],
         field_attr => {
             # format employee ids, add a link to employee page
             emp_id => {
@@ -1295,8 +1298,15 @@ HTML::Tabulate - HTML table rendering class
                 link_target => '_blank',
                 align => 'right',
             },
-            # upper all names
+            # uppercase all names
             qr/name$/ => { format => sub { uc(shift) } },
+            # highlight new employees
+            new_flag => {
+                class => sub { 
+                    my ($data, $row, $field) = @_;
+                    $data =~ m/^y$/i ? 'new', 'old';
+                },
+            },
         },
     };
 
@@ -1364,12 +1374,51 @@ become attributes of the individual <th> tags.)
 =item th
 
 Hashref. Elements become attributes on the <th> tags used for 
-labels/headings.
+labels/headings. Hash values may be either scalars, which are
+used as literals, or subroutine references, which are called with
+the following arguments:
 
+  $sub->( $data, $row, $field )
+
+and the result used as the attribute value. The arguments are:
+$data is the (label) value; $row is a reference to the entire 
+row; and $field is the name of the field (so subreferences can 
+be potentially used for more than one field). 
+
+For example, given the following set of labels on a table:
+
+  'Emp ID', 'Emp Name', 'Emp Title', 'Emp Birth Dt'
+
+you could define a class attribute to the <th> tag by doing:
+
+  th => {
+    class => sub {
+      my ($d, $r, $f) = @_;
+      $d =~ m/^Emp //;
+      $d =~ m/\s+/_/g;
+      lc $d
+    },
+  }
+
+which would give a th line like (line breaks added for clarity):
+
+  <tr>
+  <th class="id">Emp ID</th>
+  <th class="name">Emp Name</th>
+  <th class="title">Emp Title</th>
+  <th class="birth_dt">Emp Birth Dt</th>
+  </tr>
 
 =item td
 
-Hashref. Elements become attributes on <td> tags.
+Hashref. Elements become attributes on <td> tags. Hash values 
+may be either scalars, which are used directly, or subroutine 
+references, which are called with the following arguments:
+
+  $sub->( $data, $row, $field )
+
+and the result used as the attribute value. See the preceding
+L<th> item for further explanation and discussion.
 
 
 =item fields
@@ -1600,29 +1649,46 @@ and is used with the <td> tag for table cells for this field. e.g.
   field_attr => {
     emp_id => {
       align => 'center',
-      class => 'emp_id', 
       valign => 'top',
+      class => sub { my ($d, $r, $f) = @_; $f =~ s/^emp_//; $f },
     }
   }
 
 will cause emp_id table cells to be displayed as:
 
-  <td align="center" class="emp_id" valign="top">
+  <td align="center" class="id" valign="top">
+
+Attribute values may be either scalar, which are used directly, or
+subroutine references, which are called with the following arguments:
+
+  $sub->( $data, $row, $field )
+
+and the result used as the attribute value. The arguments are:
+the (unformatted) data value; a reference to the entire data row; and 
+the field name (so subreferences can be potentially used for more than 
+one field). 
 
 =item value
 
 Scalar or subroutine reference. Used to override or modify the current
 data value. If scalar is taken as a literal. If a subroutine reference,
-is called with three arguments: the data value itself, the entire data 
-row, and the field name. This allows the value to be modified or set 
-either based on an existing value, or on any other value in the row. 
-e.g.
+is called with the following arguments: 
+
+  $sub->( $data, $row, $field )
+
+and the result used as the data value. The arguments are: the original 
+data value itself; a reference to the entire data row; and the field 
+name (so subrefs can potentially be used for more than one field). 
+
+This allows the value to be modified or set according to the current
+value, or based on any other value in the row (or anything else, for
+that matter) e.g.
 
   # Derive emp_fname from first word of emp_name
   field_attr => {
     emp_fname => { 
       value => sub { 
-        my ($fn, $row, $field) = @_; 
+        my ($data, $row, $field) = @_; 
         if ($row->{emp_name} =~ m/^\s*(\w+)/) { return $1; }
         return '';
       },
@@ -1644,7 +1710,7 @@ Scalar or subroutine reference. Used as the link target to make an
 HTML link using the current data value. If scalar, the target is taken 
 as a sprintf pattern, with the current data value as the single argument. 
 If a subroutine reference, is called in the same way as the value subref 
-described above i.e. $link->($data_item, $row, $field) e.g.
+described above i.e. $link->($data, $row, $field) e.g.
 
   field_attr => {
     emp_id => {
@@ -1843,6 +1909,7 @@ like this seems to work well:
 Probably. Please let me know if you find something going awry.
 
 Is now much bigger and more complicated than was originally envisaged.
+Needs to be completely refactored. Sometime.
 
 
 =head1 AUTHOR
@@ -1852,7 +1919,7 @@ Gavin Carr <gavin@openfusion.com.au>
 
 =head1 COPYRIGHT
 
-Copyright 2003-2005, Gavin Carr. All Rights Reserved.
+Copyright 2003-2006, Gavin Carr. All Rights Reserved.
 
 This program is free software. You may copy or redistribute it under the 
 same terms as perl itself.
