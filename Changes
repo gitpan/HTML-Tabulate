@@ -2,6 +2,234 @@
 # arch-tag: automatic-ChangeLog--gavin@openfusion.com.au--public-2004/cpan--tabulate--0
 #
 
+2006-03-20 20:14:55 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-37
+
+    Summary:
+      Change tbody 'rows' and 'fields' to '-rows' and '-fields'.
+    Revision:
+      cpan--tabulate--0--patch-37
+
+    Change tbody 'rows' and 'fields' to '-rows' and '-fields'.
+    
+
+    modified files:
+     Changes Tabulate.pm t/21_tbody.t
+
+
+2006-03-19 21:08:42 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-36
+
+    Summary:
+      Update tbody/thead perldocs for attributes.
+    Revision:
+      cpan--tabulate--0--patch-36
+
+    Update tbody/thead perldocs for attributes.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2006-03-19 20:47:22 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-35
+
+    Summary:
+      Add thead attribute support.
+    Revision:
+      cpan--tabulate--0--patch-35
+
+    Add thead attribute support.
+    
+
+    new files:
+     t/t20/.arch-ids/thead3.id t/t20/thead3
+
+    modified files:
+     Changes MANIFEST Tabulate.pm t/20_thead.t
+
+
+2006-03-19 20:38:12 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-34
+
+    Summary:
+      Add tbody attribute support.
+    Revision:
+      cpan--tabulate--0--patch-34
+
+    Add tbody attribute support.
+    
+
+    new files:
+     t/t21/.arch-ids/tbody3.id t/t21/.arch-ids/tbody_field3.id
+     t/t21/.arch-ids/tbody_rows_attr.id t/t21/tbody3
+     t/t21/tbody_field3 t/t21/tbody_rows_attr
+
+    modified files:
+     Changes Tabulate.pm t/21_tbody.t t/t21/tbody_rows6
+
+
+2006-03-19 20:21:23 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-33
+
+    Summary:
+      Add initial thead/tbody perldocs.
+    Revision:
+      cpan--tabulate--0--patch-33
+
+    Add initial thead/tbody perldocs.
+    
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2006-03-16 09:36:10 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-32
+
+    Summary:
+      Finish off tbody support (scalar, field, rows); add tbody tests.
+    Revision:
+      cpan--tabulate--0--patch-32
+
+    Finish off tbody support (scalar, field, rows); add tbody tests.
+    
+
+    new files:
+     t/t21/.arch-ids/tbody_field.id t/t21/.arch-ids/tbody_field2.id
+     t/t21/.arch-ids/tbody_rows1.id t/t21/.arch-ids/tbody_rows2.id
+     t/t21/.arch-ids/tbody_rows3.id t/t21/.arch-ids/tbody_rows4.id
+     t/t21/.arch-ids/tbody_rows5.id t/t21/.arch-ids/tbody_rows6.id
+     t/t21/.arch-ids/tbody_rows7.id t/t21/tbody_field
+     t/t21/tbody_field2 t/t21/tbody_rows1 t/t21/tbody_rows2
+     t/t21/tbody_rows3 t/t21/tbody_rows4 t/t21/tbody_rows5
+     t/t21/tbody_rows6 t/t21/tbody_rows7
+
+    modified files:
+     Changes MANIFEST TODO Tabulate.pm t/21_tbody.t t/t21/tbody1
+     t/t21/tbody2
+
+
+2006-03-15 22:22:51 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-31
+
+    Summary:
+      Tiny tbody fix; add missing tbody1 test output.
+    Revision:
+      cpan--tabulate--0--patch-31
+
+    Tiny tbody fix; add missing tbody1 test output.
+    
+
+    new files:
+     t/t21/.arch-ids/tbody1.id t/t21/tbody1
+
+    modified files:
+     Changes Tabulate.pm
+
+
+2006-03-15 21:09:23 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-30
+
+    Summary:
+      Refactor body_down to use iterator; initial tbody support.
+    Revision:
+      cpan--tabulate--0--patch-30
+
+    Refactor body_down to use iterator; initial tbody support.
+    
+
+    new files:
+     t/21_tbody.t t/t21/.arch-ids/=id t/t21/.arch-ids/tbody2.id
+     t/t21/tbody2
+
+    modified files:
+     Changes Tabulate.pm t/20_thead.t t/t20/thead1 t/t20/thead2
+
+    new directories:
+     t/t21 t/t21/.arch-ids
+
+
+2006-03-14 21:42:05 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-29
+
+    Summary:
+      Add initial 'thead' support.
+    Revision:
+      cpan--tabulate--0--patch-29
+
+    Add initial 'thead' support.
+    
+
+    new files:
+     t/20_thead.t t/t20/.arch-ids/=id t/t20/.arch-ids/thead1.id
+     t/t20/.arch-ids/thead2.id t/t20/thead1 t/t20/thead2
+
+    modified files:
+     Changes TODO Tabulate.pm
+
+    new directories:
+     t/t20 t/t20/.arch-ids
+
+
+2006-03-13 21:19:32 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-28
+
+    Summary:
+      Add new-style caption support.
+    Revision:
+      cpan--tabulate--0--patch-28
+
+    Add new-style caption support.
+    
+
+    new files:
+     t/t15/.arch-ids/caption10.id t/t15/.arch-ids/caption11.id
+     t/t15/.arch-ids/caption6.id t/t15/.arch-ids/caption7.id
+     t/t15/caption10 t/t15/caption11 t/t15/caption6 t/t15/caption7
+
+    modified files:
+     Changes MANIFEST Tabulate.pm t/15_caption.t
+
+
+2006-03-13 06:42:53 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-27
+
+    Summary:
+      Update TODO.
+    Revision:
+      cpan--tabulate--0--patch-27
+
+    Update TODO.
+    
+
+    modified files:
+     Changes TODO
+
+
+2006-03-12 21:40:58 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-26
+
+    Summary:
+      Add additional tr/td sub tests on attribute => undef.
+    Revision:
+      cpan--tabulate--0--patch-26
+
+    Add additional tr/td sub tests on attribute => undef.
+    
+
+    new files:
+     t/t12/.arch-ids/fattrsub2.id t/t12/.arch-ids/thtdsub2.id
+     t/t12/.arch-ids/trsub2.id t/t12/fattrsub2 t/t12/thtdsub2
+     t/t12/trsub2
+
+    modified files:
+     Changes MANIFEST TODO t/12_trtd.t
+
+
+2006-03-12 20:41:41 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-25
+
+    Summary:
+      Get tr attr subs working; test and document; bump to 0.26.
+    Revision:
+      cpan--tabulate--0--patch-25
+
+    Get tr attr subs working; test and document; bump to 0.26.
+    
+
+    modified files:
+     Changes MANIFEST TODO Tabulate.pm t/12_trtd.t
+
+
 2006-03-12 11:26:14 GMT	Gavin Carr <gavin@openfusion.com.au>	patch-24
 
     Summary:

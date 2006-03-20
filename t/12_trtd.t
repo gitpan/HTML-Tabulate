@@ -1,6 +1,6 @@
 # tr/td coderef testing
 
-use Test::More tests => 3;
+use Test::More tests => 7;
 use HTML::Tabulate 0.25;
 use Data::Dumper;
 use strict;
@@ -51,7 +51,25 @@ $table = $t->render($data, {
 report $table, "trsub";
 is($table, $result{trsub}, "tr sub");
 
-# th/td sub
+# tr attr sub
+$table = $t->render($data, {
+  tr => {
+    class => sub { my $r = shift; my $name = $r->[1]; $name =~ s!\s.*!!; lc $name }, 
+  },
+});
+report $table, "trsub";
+is($table, $result{trsub}, "tr attr sub");
+
+# tr attr sub2
+$table = $t->render($data, {
+  tr => {
+    id => sub { my $r = shift; $r->[3] }, 
+  },
+});
+report $table, "trsub2";
+is($table, $result{trsub2}, "tr attr sub (undef)");
+
+# th/td attr sub
 $table = $t->render($data, {
   labels => 1,
   th => {
@@ -64,6 +82,19 @@ $table = $t->render($data, {
 report $table, "thtdsub";
 is($table, $result{thtdsub}, "th/td sub");
 
+# th/td attr sub2 (undef)
+$table = $t->render($data, {
+  labels => 1,
+  th => {
+    class => sub { my ($d, $r, $f) = @_; return undef unless $d =~ m/(name|title)/i; $d =~ s/^Emp //; $d =~ s/\s+/_/g; lc $d },
+  },
+  td => { 
+    class => sub { my ($d, $r, $f) = @_; my $class = ($d =~ m/^\d+$/ ? 'digits' : undef ); $class },
+  },
+});
+report $table, "thtdsub2";
+is($table, $result{thtdsub2}, "th/td sub2 (undef)");
+
 # fattr sub1
 $table = $t->render($data, {
   td => { class => 'td' },
@@ -74,5 +105,19 @@ $table = $t->render($data, {
 });
 report $table, "fattrsub1";
 is($table, $result{fattrsub1}, "fattr sub1");
+
+# fattr sub2
+$table = $t->render($data, {
+  field_attr => {
+    emp_id => { class => sub { my ($d, $r, $f) = @_; reverse $r->[0] } },
+    emp_name => { 
+      class => sub { 
+        my ($d, $r, $f) = @_; return undef unless $r->[2] eq 'CEO'; 'red'
+      },
+    },
+  },
+});
+report $table, "fattrsub2";
+is($table, $result{fattrsub2}, "fattr sub2 (undef)");
 
 # arch-tag: f26ad97a-f2aa-4e19-b5d1-f970146c5038

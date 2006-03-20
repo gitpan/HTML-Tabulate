@@ -11,17 +11,20 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.25';
+$VERSION = '0.26';
+my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
     table       => {},
     title       => { format => "<h2>%s</h2>\n" },
-    text        => { format => "<p>%s</p>\n" },
-    caption     => { format => "<p>%s</p>\n" },
+    text        => { format => $DEFAULT_TEXT_FORMAT },
+    caption     => { type => 'caption', format => $DEFAULT_TEXT_FORMAT },
     field_attr  => { -defaults => {}, },
 );
 my %VALID_ARG = (
     table => 'HASH/SCALAR',
+    thead => 'HASH/SCALAR',
+    tbody => 'HASH/SCALAR',
     tr => 'HASH/CODE', 
     thtr => 'HASH',
     th => 'HASH',
@@ -522,6 +525,26 @@ sub prerender_munge
     if ($defn_t->{stripe} && ref $defn_t->{stripe} ne 'ARRAY') {
         $defn_t->{stripe} = [ undef, $defn_t->{stripe} ];
     }
+
+    # thead implies tbody
+    if ($defn_t->{thead}) {
+        $defn_t->{tbody} ||= 1;
+        $defn_t->{thead} = {} if ! ref $defn_t->{thead};
+    }
+
+    # Setup tbody attributes hash for hashref tbodies
+    if ($defn_t->{tbody}) {
+        if (ref $defn_t->{tbody}) {
+            $defn_t->{tbody_attr} = $self->deepcopy($defn_t->{tbody});
+            for (keys %{$defn_t->{tbody_attr}}) {
+                delete $defn_t->{tbody_attr}->{$_} if m/^-/;
+            }
+        }
+        else {
+            $defn_t->{tbody_attr} = {};
+        }
+    }
+
 }
 
 # -------------------------------------------------------------------------
@@ -643,8 +666,33 @@ sub unchomp
 sub title   { my $self = shift; $self->unchomp($self->text_element('title', @_)) }
 # text: text preceding begin table tag (after title, if any)
 sub text    { my $self = shift; $self->unchomp($self->text_element('text', @_)) }
-# caption: text following end table tag
-sub caption { my $self = shift; $self->unchomp($self->text_element('caption', @_)) }
+
+# caption: either new-style <caption> text, or legacy text after end table tag
+sub caption { 
+  my $self = shift; 
+  my ($set, $post_table) = @_;
+  my $defn_t = $self->{defn_t};
+
+  # Legacy text must have a 'format' element
+  if ($post_table && 
+       (ref $defn_t->{caption} ne 'HASH' ||
+          ! $defn_t->{caption}->{type} ||
+            $defn_t->{caption}->{type} ne 'caption_caption')) {
+    $self->unchomp($self->text_element('caption', $set));
+  }
+  elsif (! $post_table && 
+          (ref $defn_t->{caption} eq 'HASH' &&
+               $defn_t->{caption}->{type} &&
+               $defn_t->{caption}->{type} eq 'caption_caption')) {
+    delete $defn_t->{caption}->{format} 
+      if ($defn_t->{caption}->{format} || '') eq $DEFAULT_TEXT_FORMAT;
+    $self->unchomp(
+      $self->start_tag('caption') . 
+      $self->text_element('caption', $set) . 
+      $self->end_tag('caption')
+    )
+  }
+}
 
 # ------------------------------------------------------------------------
 # Content before begin table tag
@@ -680,7 +728,7 @@ sub post_table
     my $self = shift;
     my ($set) = @_;
     my $content = '';
-    $content .= $self->caption($set) if $self->{defn_t}->{caption};
+    $content .= $self->caption($set, 'post_table');
     return $content;
 }
 
@@ -939,8 +987,7 @@ sub cell_tx_execute
     my ($tx_attr, $value, $row, $field) = @_;
     my %tx2 = ();
     while (my ($k,$v) = each %$tx_attr) {
-        # FIXME: this should be $v->($data, $row, $field)
-        $tx2{$k} = ref $v eq 'CODE' ? $v->($value, $row, $field) : $v;
+        $tx2{$k} = $v->($value, $row, $field) if ref $v eq 'CODE';
     }
     return \%tx2;
 }
@@ -1013,6 +1060,62 @@ sub stripe
 }
 
 #
+# Return tbody close and/or open tags if appropriate, '' otherwise
+#
+sub tbody
+{
+    my $self = shift;
+    my ($row, $rownum) = @_;
+    my $generate = 0;
+
+    return '' unless $self->{defn_t}->{tbody};
+
+    # Scalar tbody - generate once only
+    if (! ref $self->{defn_t}->{tbody}) {
+        $generate++ if ! $self->{defn_t}->{tbody_open};
+    }
+        
+    # tbody with -field - generate when field value changes
+    elsif ($self->{defn_t}->{tbody}->{'-field'}) {
+        my $value = $self->cell_value($row, $self->{defn_t}->{tbody}->{'-field'});
+        if (exists $self->{defn_t}->{tbody_field_value}) {
+            if ($value eq $self->{defn_t}->{tbody_field_value} ||
+                (! defined $value &&
+                 ! defined $self->{defn_t}->{tbody_field_value})) {
+                return '';
+            }
+            else {
+                $generate++;
+            }
+        }
+        else {
+            $generate++;
+        }
+        $self->{defn_t}->{tbody_field_value} = $value;
+    }
+
+    # tbody with -rows - generate when $rownum == $r ** n + 1
+    elsif (my $r = $self->{defn_t}->{tbody}->{'-rows'}) {
+        $generate++ if int(($rownum-1) % $r) == 0;
+    }
+
+    # else a hashref - treat like a scalar
+    else {
+        $generate++ if ! $self->{defn_t}->{tbody_open};
+    }
+
+    my $tbody = '';
+    if ($generate) {
+        if ($self->{defn_t}->{tbody_open}) {
+            $tbody .= $self->end_tag('tbody') . "\n";
+        }
+        $tbody .= $self->start_tag('tbody', $self->{defn_t}->{tbody_attr}) . "\n";
+        $self->{defn_t}->{tbody_open} = 1;
+    }
+    return $tbody;
+}
+
+#
 # Return an attribute hash for table rows
 #
 sub tr_attr
@@ -1032,8 +1135,14 @@ sub tr_attr
         else {
             $defn_t->{tr} = {} unless ref $defn_t->{tr} eq 'HASH';
             $tr = $self->deepcopy($defn_t->{tr});
+            # Evaluate any code attributes
+            $tr ||= {};
+            while (my ($k,$v) = each %$tr) {
+                $tr->{$k} = $v->($row) if ref $v eq 'CODE';
+            }
         }
     }
+    # Stripe and return
     return $self->stripe($tr, $rownum);
 }
 
@@ -1043,6 +1152,7 @@ sub tr_attr
 sub row_down 
 {
     my ($self, $row, $rownum) = @_;
+
     # Render cells
     my @cells = ();
     for my $f (@{$self->{defn_t}->{fields}}) {
@@ -1050,11 +1160,62 @@ sub row_down
     }
 
     # Build the row
-    my $out = $self->start_tag('tr', $self->tr_attr($rownum, $row));
+    my $out = '';
+    $out .= $self->start_tag('tr', $self->tr_attr($rownum, $row));
     $out .= join('',@cells);
     $out .= $self->end_tag('tr');
     $out .= "\n";
     return $out;
+}
+
+#
+# Return a generalised iterator function to walk the set, returning undef at eod
+#
+sub data_iterator 
+{
+    my ($self, $set, $fields) = @_;
+    my $row = 0;
+
+    if (ref $set && UNIVERSAL::isa($set,'UNIVERSAL') &&
+            $set->can('First') && $set->can('Next')) {
+        return sub {
+          $row = $row ? $set->Next : ($self->{prefetch} || $set->First);
+        };
+    }
+    elsif (ref $set && UNIVERSAL::isa($set,'UNIVERSAL') &&
+            $set->can('first') && $set->can('next')) {
+        return sub {
+          $row = $row ? $set->next : ($self->{prefetch} || $set->first);
+        };
+    }
+    elsif (ref $set eq 'ARRAY') {
+        return sub {
+            return undef if $row > $#$set;
+            $set->[$row++];
+        };
+    }
+    elsif (ref $set eq 'HASH' || eval { keys %$set }) {
+        # Check first value - drill down further unless non-reference
+        my $k = $fields->[0] || (sort keys %$set)[0];
+        # For hashes of scalars, just return the hash once-only
+        if (! ref $set->{$k}) {
+            return sub {
+                return undef if $row++;
+                $set;
+            };
+        }
+        # For hashes of refs, return the refs in key order
+        else {
+            return sub {
+                my @k = sort keys %$set;
+                return undef if $row > $#k;
+                return $k[$row++];
+            };
+        }
+    }
+    else {
+        croak "invalid Tabulate data type '$set'";
+    }
 }
 
 #
@@ -1065,55 +1226,39 @@ sub body_down
     my ($self, $set) = @_;
     my $body = '';
 
-    # Labels/headings
+    # Get data_iterator
     my @fields = @{$self->{defn_t}->{fields}} 
         if ref $self->{defn_t}->{fields} eq 'ARRAY';
+    my $data_next = $self->data_iterator($set, \@fields);
+
+    # Labels/headings
     if ($self->{defn_t}->{labels} && @fields) {
+        $body .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n" 
+            if $self->{defn_t}->{thead};
         $body .= $self->row_down(undef, 0);
+        if ($self->{defn_t}->{thead}) {
+          $body .= $self->end_tag('thead') . "\n";
+          $self->{defn_t}->{thead} = 0;
+        }
+    }
+    elsif ($self->{defn_t}->{thead}) {
+        # If thead set and labels isn't, use the first data row
+        my $row = $data_next->();
+        if ($row) {
+            $body .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n";
+            $body .= $self->row_down($row, 1);
+            $body .= $self->end_tag('thead') . "\n";
+        }
     }
 
-    # Data
-    my $r = 1;
-    my $row;
-    if (ref $set && UNIVERSAL::isa($set,'UNIVERSAL') &&
-            $set->can('First') && $set->can('Next')) {
-        $row = $self->{prefetch} || $set->First;
-        do {
-            $body .= $self->row_down($row, $r);
-            $r++;
-        } while ($row = $set->Next);
+    # Table body
+    my $rownum = 1;
+    while (my $row = $data_next->()) {
+        $body .= $self->tbody($row, $rownum);
+        $body .= $self->row_down($row, $rownum++);
     }
-    elsif (ref $set && UNIVERSAL::isa($set,'UNIVERSAL') &&
-            $set->can('first') && $set->can('next')) {
-        $row = $self->{prefetch} || $set->first;
-        do {
-            $body .= $self->row_down($row, $r);
-            $r++;
-        } while ($row = $set->next);
-    }
-    elsif (ref $set eq 'ARRAY') {
-        for my $row (@$set) {
-            $body .= $self->row_down($row, $r);
-            $r++;
-        }
-    }
-    elsif (ref $set eq 'HASH' || eval { keys %$set }) {
-        # Check first value - drill down further unless non-reference
-        my $k = $fields[0] || (sort keys %$set)[0];
-        if (! ref $set->{$k}) {
-            $body .= $self->row_down($set, $r);
-            $r++;
-        }
-        else {
-            for $k (sort keys %$set) {
-                $body .= $self->row_down($set->{$k}, $r);
-                $r++;
-            }
-        }
-    }
-    else {
-        croak "invalid Tabulate data type '$set'";
-    }
+
+    $body .= $self->end_tag('tbody') . "\n" if $self->{defn_t}->{tbody_open};
 
     return $body;
 }
@@ -1203,23 +1348,25 @@ sub body_across
 sub render_table
 {
     my ($self, $set) = @_;
+    my $defn_t = $self->{defn_t};
 
     # Style-specific bodies (default is 'down')
     my $body;
-    if ($self->{defn_t}->{style} eq 'down') {
+    if ($defn_t->{style} eq 'down') {
         $body .= $self->body_down($set);
     }
-    elsif ($self->{defn_t}->{style} eq 'across') {
+    elsif ($defn_t->{style} eq 'across') {
         $body .= $self->body_across($set);
     }
     else {
-        croak "[render] invalid style '$self->{defn_t}->{style}'";
+        croak sprintf "[render] invalid style '%s'", $defn_t->{style};
     }
 
     # Build table
     my $table = '';
     $table .= $self->pre_table($set);
     $table .= $self->start_table();
+    $table .= $self->caption($set);
     $table .= $body;
     $table .= $self->end_table();
     $table .= $self->post_table($set);
@@ -1360,21 +1507,70 @@ Hashref. Elements become attributes on the <table> tag. e.g.
 
 =item tr
 
-Hashref. Elements become attributes on <tr> tags.
+Hashref. Elements become attributes on <tr> tags. Element values
+may be either scalars, which are used as literals, or subroutine
+references which are called with the following arguments:
+
+  $sub->( $row )
+
+where $row is a reference to the data row, and the result is used
+as the attribute value. e.g.
+ 
+  tr => {
+    class => sub { 
+      my $r = shift; my $name = $r->[1]; $name =~ s/\s+/_/; lc $name
+    },
+  },
+
+will set the 'class' attribute on the 'tr' to be a lowercased
+underscored version of $r->[1].
+
+
+=item thead
+
+Scalar/hashref. If defined and true, the first line of the table 
+(whether labels or data) will be wrapped in <thead> ... </thead> 
+tags. Any entries in the hashref will be used as attributes for
+the thead tag. Note that theads require a tbody, so tbody 
+(following) will be set to 1 if undefined.
+
+
+=item tbody
+
+Scalar/hashref. If defined and true, the default treatment is
+to wrap the table body (the non-labels portion of the table) 
+in a single set of <tbody> .. </tbody> tags. Any entries in the 
+hashref (except for '-field' and '-rows', used below) will be 
+used as attributes for the tbody tag.
+
+Two additional tbody styles are supported. If a '"-field" => 
+"FIELDNAME"' element exists in the tbody hashref, then the table 
+body will be broken into tbody sections whenever the value of the 
+given field changes (does not necessarily need to be a 
+B<displayed> field, of course) e.g.
+
+  tbody => { '-field' => 'emp_gender' }
+
+If a '"-rows" => NUMBER' element exists in the tbody hashref, the 
+table body will be broken into tbody sections every NUMBER rows.
+e.g.
+
+  tbody => { '-rows' => 25 }
 
 
 =item thtr
 
 Hashref. Elements become attributes on the <tr> tag of the
-label/heading row. (For 'across' style tabels, where labels are
+label/heading row. (For 'across' style tables, where labels are
 displayed down the page, rather than in a row, thtr elements 
-become attributes of the individual <th> tags.)
+become attributes of the individual <th> tags.) Element values 
+must be scalars.
 
 
 =item th
 
 Hashref. Elements become attributes on the <th> tags used for 
-labels/headings. Hash values may be either scalars, which are
+labels/headings. Element values may be either scalars, which are
 used as literals, or subroutine references, which are called with
 the following arguments:
 
@@ -1603,17 +1799,17 @@ be used.
 
 Examples:
  
-    # rendered: <h2>Employee Foo</h2>
-    title => 'Employee Foo'
-    # rendered: <h3 class="red_white_blue">Employee Foo</h3>
+    # rendered: <h2>Employee Data</h2>
+    title => 'Employee Data'
+    # rendered: <h3 class="red_white_blue">Employee Data</h3>
     title => {
-        value => 'Employee Foo',
+        value => 'Employee Data',
         format => '<h3 class="red_white_blue">%s</h3>',
     }
-    # rendered (e.g.): <h2>Employee Foo (3 records)</h2>
+    # rendered (e.g.): <h2>Employee Data (3 records)</h2>
     title => sub {
         my ($set, $type) = @_;
-        my $title = 'Employee Foo';
+        my $title = 'Employee Data';
         $title .= ' (' . scalar(@$set) . ' records)'
             if ref $set eq 'ARRAY';
         sprintf '<h2>%s</h2>', $title;
@@ -1629,9 +1825,58 @@ subrefs is 'text', and the default format defined is '<p>%s</p>'.
 =item caption
 
 Scalar, hashref, or subroutine reference, defining text to be included 
-immediately after the table. Treated exactly like 'title' above, except 
-that the $type argument passed to subrefs is 'caption', and the default 
-format defined is '<p>%s</p>'.
+as a caption to the table. Two types of output are supported: the 'text' 
+type is treated just like 'title' and 'text' above, except that the
+text is included immediately B<after> the table, the $type argument
+passed to subrefs is 'caption', and the default format defined is 
+'<p>%s</p>'.
+
+From version 0.26, a new 'caption_caption' type is supported, which 
+is rendered as a <caption> attribute on the table (with presentation 
+typically controlled via css). To force this type, you should use
+a hashref caption argument, with an explicit type of 'caption_caption'.
+See below for examples.
+
+For backward compatibility, the default is old-style type => 'caption'. 
+That will change in a future release.
+
+For example:
+
+  # Old style text caption, rendered below table
+  # rendered <p>Employee Data</p> (below table)
+  caption => 'Employee Data'
+  # rendered <div class="emp_data">Employee Data</div> (below table)
+  caption => { 
+    value => 'Employee Data', 
+    format => '<div class="emp_data">%s</div>',
+  }
+  # rendered (e.g.): <p>Employee Data (3 records)</p> (below table)
+  caption => sub {
+      my ($set, $type) = @_;
+      my $caption = 'Employee Data';
+      $caption .= ' (' . scalar(@$set) . ' records)'
+          if ref $set eq 'ARRAY';
+      sprintf '<p>%s</p>', $caption;
+  }
+
+  # New-style <caption> caption, rendered within table
+  # rendered <caption>Employee Data</caption> (within table)
+  caption => { 
+    type => 'caption_caption',
+    value => 'Employee Data', 
+  }
+  # rendered (e.g.): <caption>Employee Data (3 records)</caption> (within table)
+  caption => {
+    type => 'caption_caption',
+    value => 'Employee Data',
+    format => sub {
+      my ($caption, $set, $type) = @_;
+      $caption .= ' (' . scalar(@$set) . ' records)'
+          if ref $set eq 'ARRAY';
+      $caption
+    }
+  }
+
 
 =back
 
@@ -1927,3 +2172,4 @@ same terms as perl itself.
 =cut
 
 # arch-tag: affab4f7-8dcb-4f32-86f4-ed77cb9e349d
+# vim:sw=4
