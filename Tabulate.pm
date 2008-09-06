@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.29';
+$VERSION = '0.30';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -67,6 +67,9 @@ my %FIELD_ATTR = (
     label_format => 'SCALAR/CODE',
     label_link => 'SCALAR/CODE',
     label_escape => 'SCALAR',
+    default => 'SCALAR',
+    composite => 'ARRAY',
+    composite_join => 'SCALAR/CODE',
 );
 my $URI_ESCAPE_CHARS = "^A-Za-z0-9\-_.!~*'()?&;:/=";
 $TITLE_HEADING_LEVEL = 'h2';   # TODO: deprecated
@@ -948,7 +951,33 @@ sub cell_value
         };
     }
 
+    $value = $fattr->{default} if ! defined $value && exists $fattr->{default};
+
     return defined $value ? $value : '';
+}
+
+# 
+# Return a cell value created from one or more other cells
+#
+sub cell_composite
+{
+    my $self = shift;
+    my ($row, $field, $fattr) = @_;
+
+    my $composite = $fattr->{composite} 
+        or die "Missing composite field attribute";
+    my @composite = ();
+    for my $f (@$composite) {
+        push @composite, $self->cell($row, $f, undef, undef, tags => 0);
+    }
+
+    my $composite_join = $fattr->{composite_join} || ' ';
+    if (ref $composite_join eq 'CODE') {
+        return $composite_join->(\@composite, $row, $field);
+    }
+    else {
+        return join ' ', @composite;
+    }
 }
 
 #
@@ -958,9 +987,17 @@ sub cell_content
 {
     my $self = shift;
     my ($row, $field, $fattr) = @_;
+    my $value;
 
-    # Get value from $row
-    my $value = $self->cell_value(@_);
+    # Composite fields - concatenate members together
+    if ($fattr->{composite}) {
+        $value = $self->cell_composite(@_);
+    }
+
+    # Standard field - get value from $row
+    else {
+        $value = $self->cell_value(@_);
+    }
 
     # Format
     my $fvalue = $self->cell_format($value, $fattr, $row, $field);
@@ -1004,7 +1041,9 @@ sub cell_tx_execute
 #
 sub cell 
 {
-    my ($self, $row, $field, $fattr, $tx_attr) = @_;
+    my ($self, $row, $field, $fattr, $tx_attr, %opts) = @_;
+    my $tags = delete $opts{tags};
+    $tags = 1 unless defined $tags;
 
     # Merge default and field attributes first time through (labels + data)
     my $tx_code = 0;
@@ -1019,7 +1058,7 @@ sub cell
         }
     }
 
-    # Generate output
+    # Standard (non-composite) fields
     my ($fvalue, $value) = $self->cell_content($row, $field, $fattr);
 
     # If $tx_addr includes coderefs, execute them
@@ -1027,7 +1066,7 @@ sub cell
         if $tx_code;
 
     # Generate tags
-    return $self->cell_tags($fvalue, $row, $field, $tx_attr);
+    return $tags ? $self->cell_tags($fvalue, $row, $field, $tx_attr) : $fvalue;
 }
 
 #
@@ -1127,7 +1166,7 @@ sub tbody
 #
 sub tr_attr
 {
-    my ($self, $rownum, $row) = @_;
+    my ($self, $rownum, $row, $dataset) = @_;
     my $defn_t = $self->{defn_t};
     my $tr = undef;
     if ($rownum == 0) {
@@ -1135,9 +1174,8 @@ sub tr_attr
         $tr ||= $self->deepcopy($defn_t->{tr_base});
     }
     else {
-        # Note that CODE TRs doesn't work for style => 'across' tables!!
         if (ref $defn_t->{tr} eq 'CODE' && $row) {
-            $tr = $defn_t->{tr}->($row);
+            $tr = $defn_t->{tr}->($row, $dataset);
         }
         else {
             $defn_t->{tr} = {} unless ref $defn_t->{tr} eq 'HASH';
@@ -1145,7 +1183,7 @@ sub tr_attr
             # Evaluate any code attributes
             $tr ||= {};
             while (my ($k,$v) = each %$tr) {
-                $tr->{$k} = $v->($row) if ref $v eq 'CODE';
+                $tr->{$k} = $v->($row, $dataset) if ref $v eq 'CODE';
             }
         }
     }
@@ -1285,17 +1323,22 @@ sub row_across
 {
     my ($self, $data, $rownum, $field) = @_;
     my @cells = ();
+    my @across_row = ();
 
     # Label/heading
-    push @cells, $self->cell(undef, $field) if $self->{defn_t}->{labels};
+    if ($self->{defn_t}->{labels}) {
+        push @cells, $self->cell(undef, $field);
+        push @across_row, $self->cell(undef, $field, undef, undef, tags => 0);
+    }
 
     # Data
     for my $row (@$data) {
         push @cells, $self->cell($row, $field);
+        push @across_row, $self->cell_value($row, $field);
     }
 
     # Build row
-    my $out = $self->start_tag('tr', $self->tr_attr($rownum));
+    my $out = $self->start_tag('tr', $self->tr_attr($rownum, $data, \@across_row));
     $out .= join('', @cells);
     $out .= $self->end_tag('tr') . "\n";
 }
@@ -1524,21 +1567,37 @@ Hashref. Elements become attributes on the <table> tag. e.g.
 
 Hashref. Elements become attributes on <tr> tags. Element values
 may be either scalars, which are used as literals, or subroutine
-references which are called with the following arguments:
+references whose result value is used as the value of the tr
+attribute.
 
-  $sub->( $row )
+Note that 'tr' element subs are called differently depending on 
+the 'style' of the table. For 'down' style tables, they are called
+with a single argument:
 
-where $row is a reference to the data row, and the result is used
-as the attribute value. e.g.
- 
+  $sub->( $data_row )
+
+which is the reference to the current data row. For 'across' style
+tables, they are called with two arguments:
+
+  $sub->( $across_row, $data )
+
+where the first is an arrayref of the values in the data slice
+(column) in your dataset that are being rendered as the current 
+row (including labels, if used), and the second is the full dataset 
+as an arrayref of your data rows.
+
+For instance:
+
+  style => 'across',
+  labels => 1, 
   tr => {
     class => sub { 
-      my $r = shift; my $name = $r->[1]; $name =~ s/\s+/_/; lc $name
+      my $r = shift; my $name = $r->[0]; $name =~ s/\s+/_/; lc $name
     },
   },
 
 will set the 'class' attribute on the 'tr' to be a lowercased
-underscored version of $r->[1].
+underscored version of the row label.
 
 
 =item thead
@@ -2061,6 +2120,42 @@ creates a link for the label like:
 Boolean (default true). HTML-escapes '<' and '>' characters in data 
 values.
 
+
+=item composite
+
+Arrayref. New as of version 0.30, composite fields define an ordered 
+list of other fields that you want to appear in a single cell. For
+instance, given individual name fields in your data you might want to
+define a composite name field to use in your table instead e.g.
+
+  field_attr => {
+    fullname => {
+      composite => [ qw(given_name middle_initial surname) ],
+    },
+    surname => {
+      format => sub { uc $_[0] },
+    },
+    # ...
+  },
+
+Typically, the base fields appear in your data (e.g. given_name, 
+middle_initial, and surname) but not in your table, and your 
+composite field appears in the table but not in your data (but
+other patterns do make sense too sometimes).
+
+=item composite_join
+
+Scalar or subroutine reference. If a scalar, functions as the string
+used to join the rendered composite fields together. If a subroutine
+reference, is called with the following arguments:
+
+  $composite_join->(\@composite_fields, $row, $field_name)
+
+and is expected to join the composite fields itself and return the
+joined string.
+
+Default: ' '.
+
 =back
 
 
@@ -2100,7 +2195,6 @@ render() can also be used procedurally if explicitly imported:
 =back
 
 
-
 =head2 DATASETS
 
 HTML::Tabulate supports the following dataset types:
@@ -2136,7 +2230,7 @@ first object if not supplied.
 
 =item Iterators
 
-Some kinds of iterators (pointer objects used to access the members
+Some kinds of iterators (utility objects used to access the members
 of a set) are also supported. If the iterator supports methods called
 First() and Next() or first() and next() then HTML::Tabulate will use
 those methods to walk the dataset. DBIx::Recordset objects and 
