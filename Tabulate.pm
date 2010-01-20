@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.32';
+$VERSION = '0.33';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -70,6 +70,10 @@ my %FIELD_ATTR = (
     default => 'SCALAR',
     composite => 'ARRAY',
     composite_join => 'SCALAR/CODE',
+);
+my %MINIMISED_ATTR = map { $_ => 1 } qw(
+    checked compact declare defer disabled ismap multiple 
+    nohref noresize noshade nowrap readonly selected 
 );
 my $URI_ESCAPE_CHARS = "^A-Za-z0-9\-_.!~*'()?&;:/=";
 $TITLE_HEADING_LEVEL = 'h2';   # TODO: deprecated
@@ -563,7 +567,7 @@ sub prerender_munge
 #   An attribute with a non-empty value (i.e. not '' or undef) is rendered
 #   attr="value"; one with a value of '' is rendered as a 'bare' attribute
 #   (i.e. no '=') in non-xhtml mode; one with undef is simply ignored 
-#   (allowing unset CGI parameters to be ignored).
+#   (e.g. allowing unset CGI parameters to be ignored).
 #
 sub start_tag
 {
@@ -572,11 +576,17 @@ sub start_tag
     my $str = "<$tag";
     if (ref $attr eq 'HASH') {
         for my $a (sort keys %$attr) {
-            if (defined $attr->{$a} && $attr->{$a} ne '') {
+            next if ! defined $attr->{$a};
+            if ($attr->{$a} ne '') {
                 $str .= qq( $a="$attr->{$a}");
             }
-            elsif (defined $attr->{$a}) {
-                $str .= $xhtml ? qq( $a="") : qq( $a);
+            else {
+                if ($MINIMISED_ATTR{$a}) {
+                    $str .= $xhtml ? qq( $a="$a") : qq( $a);
+                }
+                else {
+                    $str .= qq( $a="");
+                }
             }
         }
     }
@@ -1044,7 +1054,7 @@ sub cell_tx_execute
 #
 # Render a single table cell or item
 #
-sub cell 
+sub cell_wantarray
 {
     my ($self, $row, $field, $fattr, $tx_attr, %opts) = @_;
     my $tags = delete $opts{tags};
@@ -1071,7 +1081,20 @@ sub cell
         if $tx_code;
 
     # Generate tags
-    return $tags ? $self->cell_tags($fvalue, $row, $field, $tx_attr) : $fvalue;
+    my $cell = $tags ? $self->cell_tags($fvalue, $row, $field, $tx_attr) : $fvalue;
+    return $cell unless wantarray;
+    my $skip_count = $tx_attr->{colspan} ? ($tx_attr->{colspan}-1) : 0;
+    return ( $cell, $skip_count );
+}
+
+# 
+# Render a single table cell, returning cell and a field skip count
+#
+sub cell
+{
+    my $self = shift;
+    my ($cell, $skip_count) = $self->cell_wantarray(@_);
+    return $cell;
 }
 
 #
@@ -1205,8 +1228,15 @@ sub row_down
 
     # Render cells
     my @cells = ();
+    my $skip_count = 0;
     for my $f (@{$self->{defn_t}->{fields}}) {
-        push @cells, $self->cell($rownum == 0 ? undef : $row, $f);
+        if ($skip_count > 0) {
+            $skip_count--;
+        }
+        else {
+            (my ($cell), $skip_count) = $self->cell_wantarray($rownum == 0 ? undef : $row, $f);
+            push @cells, $cell;
+        }
     }
 
     # Build the row
@@ -1764,6 +1794,14 @@ Scalar, either 'down' (the default), or 'across', to render data 'rows'
 as table 'columns'.
 
 
+=item xhtml
+
+Scalar (boolean). Turns on 'xhtml' mode if true. xhtml mode closes empty 
+elements with a trailing slash (e.g. <br />), and renders minimised 
+attributes in HTML (e.g. nowrap, disabled, selected, etc.) in 
+non-minimised (nowrap="nowrap") format. Default: 0.
+
+
 =item labels
 
 Scalar (boolean), or hashref (mapping field keys to label/heading values). 
@@ -1986,7 +2024,7 @@ as main data rows.
 =item HTML attributes
 
 Any field attribute that does not have a special meaning to HTML::Tabulate
-(see the six remaining items in this section) is considered an HTML attribute
+(see the remaining items in this section) is considered an HTML attribute
 and is used with the <td> tag for table cells for this field. e.g.
 
   field_attr => {
@@ -2010,6 +2048,27 @@ and the result used as the attribute value. The arguments are:
 the (unformatted) data value; a reference to the entire data row; and 
 the field name (so subreferences can be potentially used for more than 
 one field). 
+
+One HTML attribute that is handled specially is B<colspan>. If you set
+colspan to a number greater than one, the cell will be rendered with
+<td colspan="$colspan" ...> (as normal), and the next $colspan-1 fields 
+will be skipped entirely. For instance, if you have a three element table 
+and define:
+
+  field_attr => {
+    name => {
+      colspan => sub {
+        my $data = shift;
+        return $data =~ m/^Group/ ? 3 : undef;
+      },
+    },
+  }
+
+then any rows with names beginning with 'Group' will be rendered:
+
+  <tr><td colspan="3">Group A</td></tr>
+
+Note that 'colspan' is NOT supported with 'across' style tables, however.
 
 =item value
 
@@ -2316,7 +2375,7 @@ subref iterator support (version 0.31).
 
 =head1 COPYRIGHT
 
-Copyright 2003-2008, Gavin Carr.
+Copyright 2003-2010, Gavin Carr.
 
 This program is free software. You may copy or redistribute it under the 
 same terms as perl itself.
