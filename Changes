@@ -1,4 +1,53 @@
 ------------------------------------------------------------
+revno: 26
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Mon 2010-02-01 13:00:41 +0000
+message:
+  Add DBIx::Class to 10_iterators.t tests, and update with env-based dsn/user/pass.
+------------------------------------------------------------
+revno: 25
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Mon 2010-02-01 11:41:04 +0000
+message:
+  Use FindBin for finding test results directories.
+------------------------------------------------------------
+revno: 24
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Mon 2010-02-01 10:50:32 +0000
+message:
+  Updates to Changes, EXCLUDE, MANIFEST, and MANIFEST.SKIP.
+------------------------------------------------------------
+revno: 23
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Tue 2010-01-26 17:41:22 +0000
+message:
+  Convert Makefile.PL to Module::Install; bump version to 0.34.
+------------------------------------------------------------
+revno: 22
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Wed 2010-01-20 11:12:37 +0000
+message:
+  Add proper handling of minimised attributes in html and xhtml modes.
+------------------------------------------------------------
+revno: 21
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Wed 2010-01-20 10:45:57 +0000
+message:
+  Update MANIFEST.
+------------------------------------------------------------
+revno: 20
+committer: Gavin Carr <gavin@openfusion.com.au>
+branch nick: HTML-Tabulate
+timestamp: Wed 2010-01-20 10:42:36 +0000
+message:
+  Add Changes file; bump version number to 0.33.
+------------------------------------------------------------
 revno: 19
 committer: Gavin Carr <gavin@openfusion.com.au>
 branch nick: HTML-Tabulate
