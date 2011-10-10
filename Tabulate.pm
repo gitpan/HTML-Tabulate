@@ -3,6 +3,7 @@ package HTML::Tabulate;
 use 5.005;
 use Carp;
 use URI::Escape;
+use Scalar::Util qw(blessed);
 use strict;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK $TITLE_HEADING_LEVEL);
 
@@ -11,7 +12,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.35';
+$VERSION = '0.37';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -54,6 +55,12 @@ my %VALID_ARG = (
     caption => 'SCALAR/HASH/CODE',
     # data_append: data rows to appended to main dataset
     data_append => 'ARRAY',
+    # colgroups: array of hashrefs to be inserted as individual colgroups
+    colgroups => 'ARRAY',
+    # labelgroups: named groupings of labels used to create two-tier headers
+    labelgroups => 'HASH',
+    # derived: fields not present in the underlying data, to skip unnecessary lookups
+    derived => 'ARRAY',
 );
 my %VALID_FIELDS = (
     -defaults => 'HASH',
@@ -70,6 +77,7 @@ my %FIELD_ATTR = (
     default => 'SCALAR',
     composite => 'ARRAY',
     composite_join => 'SCALAR/CODE',
+    derived => 'SCALAR',
 );
 my %MINIMISED_ATTR = map { $_ => 1 } qw(
     checked compact declare defer disabled ismap multiple 
@@ -507,6 +515,13 @@ sub prerender_munge
         }
     }
 
+    # Map top-level 'derived' field list into fields
+    if ($defn_t->{derived}) {
+        for (@{ $defn_t->{derived} }) {
+            $defn_t->{field_attr}->{$_}->{derived} = 1;
+        }
+    }
+
     # If style across, map top-level 'thtr' hashref into -defaults label_ attributes
     if ($self->{defn_t}->{style} eq 'across' && ref $defn_t->{thtr} eq 'HASH') {
         for (keys %{$defn_t->{thtr}}) {
@@ -559,6 +574,72 @@ sub prerender_munge
         }
     }
 
+}
+
+# Split fields up according to labelgroups into two field lists
+# labelgroup entries look like LabelGroup => [ qw(field1 field2 field3) ]
+sub labelgroup_fields
+{
+    my $self = shift;
+
+    my @fields = @{$self->{defn_t}->{fields}};
+    my $labelgroups = $self->{defn_t}->{labelgroups};
+
+    # Map first field of each labelgroup into a hash
+    my %grouped_fields;
+    for my $label (keys %$labelgroups) {
+        my $field1 = $labelgroups->{$label}->[0];
+        $grouped_fields{ $field1 } = $label;
+    }
+
+    # Process all fields looking for label groups, and splitting out if found
+    my (@fields1, @fields2);
+    while (my $f = shift @fields) {
+        if (my $label = $grouped_fields{ $f }) {
+            # Found a grouped label - splice labelled fields into fields2
+            my @gfields = @{ $labelgroups->{$label} };
+            shift @gfields;  # discard $f
+
+            # Check all fields match
+            my @next_group;
+            while (my $g = shift @gfields) {
+                my $fn = shift @fields;
+                push @next_group, $fn if $fn eq $g;
+            }
+
+            # If we have as many as we're expecting, we're good
+            if (@next_group == @{ $labelgroups->{$label} } - 1) {
+                push @fields2, $f, @next_group;
+                push @fields1, $label;
+            }
+            # Otherwise our field list doesn't exactly match the label group - omit
+            else {
+                push @fields1, $f;
+                # Push @next_group back into @fields for reprocessing
+                unshift @fields, @next_group;
+            }
+        }
+
+        # Not a labelgroup
+        else {
+            push @fields1, $f;
+        }
+    }
+
+    # Setup $field1_tx_attr map if we have any @fields2 fields
+    my $field1_tx_attr = {};
+    if (@fields2) {
+        for my $f (@fields1) {
+            if (my $grouped_fields = $labelgroups->{$f}) {
+                $field1_tx_attr->{$f} = { colspan => scalar(@$grouped_fields) };
+            }
+            else {
+                $field1_tx_attr->{$f} = { rowspan => 2 };
+            }
+        }
+    }
+
+    return (\@fields1, \@fields2, $field1_tx_attr);
 }
 
 # -------------------------------------------------------------------------
@@ -712,6 +793,30 @@ sub caption {
       $self->end_tag('caption')
     )
   }
+}
+
+sub colgroups {
+  my $self = shift;
+  my ($set) = @_;
+  my $defn_t = $self->{defn_t};
+
+  return '' unless $self->{defn_t}->{colgroups};
+
+  my $content = '';
+  for my $cg (@{$self->{defn_t}->{colgroups}}) {
+    if ($cg->{cols} && ref $cg->{cols} && ref $cg->{cols} eq 'ARRAY') {
+        my $cols = delete $cg->{cols};
+        $content .= $self->start_tag('colgroup', $cg, 0) . "\n";
+        for my $col (@$cols) {
+            $content .= $self->start_tag('col', $col, 1) . "\n";
+        }
+        $content .= $self->end_tag('colgroup') . "\n";
+    }
+    else {
+        $content .= $self->start_tag('colgroup', $cg, 1) . "\n";
+    }
+  }
+  return $content;
 }
 
 # ------------------------------------------------------------------------
@@ -937,32 +1042,41 @@ sub cell_value
     my $self = shift;
     my ($row, $field, $fattr) = @_;
     my $defn = $self->{defn_t};
-
-    # Get value from $row
     my $value;
-    if (ref $row eq 'ARRAY') {
-        my $i = keys %{$defn->{field_map}} ? $defn->{field_map}->{$field} : $field;
-        $value = $row->[ $i ] if defined $i;
+
+    # 'value' literal takes precedence over row
+    if (exists $fattr->{value} && ! ref $fattr->{value}) {
+        $value = defined $fattr->{value} ? $fattr->{value} : '';
     }
-    # Allow field-methods e.g. Class::DBI
-    elsif (ref $row && ref $row ne 'HASH' && ref $row ne 'SCALAR' && $row->can($field)) {
-        $value = eval "\$row->$field()";
-    }
-    elsif (ref $row && exists $row->{$field}) {
-        $value = $row->{$field};
-    }
-    # 'value' literal or subref takes precedence over row
-    if (exists $fattr->{value}) {
-        my $ref = ref $fattr->{value};
-        if (! $ref) {
-            # $value = sprintf $fattr->{value}, $value;
-            $value = $fattr->{value};
+
+    # Get value from $row (but skip 'derived' fields)
+    elsif (ref $row && ! $fattr->{derived}) {
+        if (ref $row eq 'ARRAY') {
+            my $i = keys %{$defn->{field_map}} ? $defn->{field_map}->{$field} : $field;
+            $value = $row->[ $i ] if defined $i;
         }
-        elsif ($ref eq 'CODE') {
+        else {
+            # get_column() methods e.g. DBIx::Class
+            $value = eval { $row->get_column($field) }
+                if eval { $row->can('get_column') };
+            # Allow field-methods e.g. Class::DBI, DBIx::Class
+            $value = eval "\$row->$field()"
+                if ! defined $value && eval { $row->can($field) }
+                     && $field ne 'delete';  # special DBIx::Class protection :-)
+            # Hash-based rows
+            $value = $row->{$field}
+                if ! defined $value && ref $row eq 'HASH' && exists $row->{$field};
+        }
+    }
+
+    # Handle 'value' subref
+    if (exists $fattr->{value} && ref $fattr->{value}) {
+        my $ref = ref $fattr->{value};
+        if ($ref eq 'CODE') {
             $value = &{$fattr->{value}}($value, $row, $field);
         }
         else {
-            croak "[cell_value] invalid '$field' value: $ref";
+            croak "[cell_value] invalid '$field' value (not scalar or code ref): $ref";
         };
     }
 
@@ -1054,11 +1168,18 @@ sub cell_tx_execute
 #
 # Render a single table cell or item
 #
-sub cell_wantarray
+sub cell_single
 {
-    my ($self, $row, $field, $fattr, $tx_attr, %opts) = @_;
-    my $tags = delete $opts{tags};
+    my ($self, %args) = @_;
+    my $row             = delete $args{row};
+    my $field           = delete $args{field};
+    my $fattr           = delete $args{field_attr};
+    my $tx_attr         = delete $args{tx_attr};
+    my $tx_attr_extra   = delete $args{tx_attr_extra};
+    my $skip_count      = delete $args{skip_count};
+    my $tags            = delete $args{tags};
     $tags = 1 unless defined $tags;
+    die "Unknown arguments to cell_single: " . join(',', keys %args) if %args;
 
     # Merge default and field attributes first time through (labels + data)
     my $tx_code = 0;
@@ -1076,25 +1197,57 @@ sub cell_wantarray
     # Standard (non-composite) fields
     my ($fvalue, $value) = $self->cell_content($row, $field, $fattr);
 
-    # If $tx_addr includes coderefs, execute them
+    # If $tx_attr includes coderefs, execute them
     $tx_attr = $self->cell_tx_execute($tx_attr, $value, $row, $field) 
         if $tx_code;
 
+    my $tx_attr_merged = $tx_attr;
+    $tx_attr_merged = { %$tx_attr, %{$tx_attr_extra->{$field}} }
+        if $tx_attr_extra && $tx_attr_extra->{$field};
+
     # Generate tags
-    my $cell = $tags ? $self->cell_tags($fvalue, $row, $field, $tx_attr) : $fvalue;
-    return $cell unless wantarray;
-    my $skip_count = $tx_attr->{colspan} ? ($tx_attr->{colspan}-1) : 0;
-    return ( $cell, $skip_count );
+    my $cell = $tags ? $self->cell_tags($fvalue, $row, $field, $tx_attr_merged) : $fvalue;
+
+    $$skip_count = $tx_attr->{colspan} ? ($tx_attr->{colspan}-1) : 0
+        if $skip_count && ref $skip_count && ref $skip_count eq 'SCALAR';
+
+    return $cell;
+}
+
+#
+# Legacy interface (deprecated)
+#
+sub cell_wantarray
+{
+    my ($self, $row, $field, $fattr, $tx_attr, %opts) = @_;
+
+    my $skip_count;
+    my $cell = $self->cell_single(
+        %opts,
+        row => $row,
+        field => $field,
+        field_attr => $fattr,
+        tx_attr => $tx_attr,
+        skip_count => \$skip_count,
+    );
+
+    return ($cell, $skip_count);
 }
 
 # 
-# Render a single table cell, returning cell and a field skip count
+# Render a single table cell (legacy interface)
 #
 sub cell
 {
-    my $self = shift;
-    my ($cell, $skip_count) = $self->cell_wantarray(@_);
-    return $cell;
+    my ($self, $row, $field, $fattr, $tx_attr, %opts) = @_;
+
+    $self->cell_single(
+        %opts,
+        row => $row,
+        field => $field,
+        field_attr => $fattr,
+        tx_attr => $tx_attr,
+    );
 }
 
 #
@@ -1224,27 +1377,34 @@ sub tr_attr
 #
 sub row_down 
 {
-    my ($self, $row, $rownum) = @_;
+    my ($self, $row, $rownum, %args) = @_;
+    my $fields = delete $args{fields};
+    $fields ||= $self->{defn_t}->{fields};
+    my $tx_attr_extra = delete $args{tx_attr_extra};
+    my %tx_attr_extra = $tx_attr_extra ? ( tx_attr_extra => $tx_attr_extra ) : ();
+
+    # Open tr
+    my $out = '';
+    $out .= $self->start_tag('tr', $self->tr_attr($rownum, $row));
 
     # Render cells
     my @cells = ();
     my $skip_count = 0;
-    for my $f (@{$self->{defn_t}->{fields}}) {
+    for my $f (@$fields) {
         if ($skip_count > 0) {
             $skip_count--;
+            next;
+        }
+
+        if (! $row) {
+            $out .= $self->cell_single(field => $f, skip_count => \$skip_count, %tx_attr_extra);
         }
         else {
-            (my ($cell), $skip_count) = $self->cell_wantarray($rownum == 0 ? undef : $row, $f);
-            push @cells, $cell;
+            $out .= $self->cell_single(row => $row, field => $f, skip_count => \$skip_count, , %tx_attr_extra);
         }
     }
 
-    # Build the row
-    my $out = '';
-    $out .= $self->start_tag('tr', $self->tr_attr($rownum, $row));
-    $out .= join('',@cells);
-    $out .= $self->end_tag('tr');
-    $out .= "\n";
+    $out .= $self->end_tag('tr') . "\n";
     return $out;
 }
 
@@ -1321,7 +1481,16 @@ sub body_down
     if ($self->{defn_t}->{labels} && @fields) {
         $body .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n" 
             if $self->{defn_t}->{thead};
-        $body .= $self->row_down(undef, 0);
+
+        if ($self->{defn_t}->{labelgroups}) {
+            my ($fields1, $fields2, $field1_tx_attr) = $self->labelgroup_fields;
+            $body .= $self->row_down(undef, 0, fields => $fields1, tx_attr_extra => $field1_tx_attr);
+            $body .= $self->row_down(undef, 0, fields => $fields2) if @$fields2;
+        }
+        else {
+            $body .= $self->row_down(undef, 0);
+        }
+
         if ($self->{defn_t}->{thead}) {
           $body .= $self->end_tag('thead') . "\n";
           $self->{defn_t}->{thead} = 0;
@@ -1472,6 +1641,7 @@ sub render_table
     $table .= $self->pre_table($set);
     $table .= $self->start_table();
     $table .= $self->caption($set);
+    $table .= $self->colgroups($set);
     $table .= $body;
     $table .= $self->end_table();
     $table .= $self->post_table($set);
@@ -1488,8 +1658,8 @@ sub render
     my ($self, $set, $defn) = @_;
     $set = {} unless ref $set;
 
-    # If $self is not blessed, this is a procedural call, $self is $set
-    if (ref $self eq 'HASH' || ref $self eq 'ARRAY') {
+    # If $self is not a subclass of HTML::Tabulate, this is a procedural call, $self is $set
+    if (! ref $self || ! blessed $self || ! $self->isa('HTML::Tabulate')) {
       $defn = $set;
       $set = $self;
       $self = __PACKAGE__->new($defn);
@@ -1788,6 +1958,16 @@ different to the output order defined in 'fields' above. e.g.
 Using in_fields only makes sense if the dataset rows are arrayrefs. 
 
 
+=item derived
+
+Arrayref. Defines fields that are not present in the underlying data,
+to avoid unnecessary lookups. (You are presumably deriving these values
+from other data in the row via a 'value' sub or something.)
+
+Can also be set as a derived flag in per-field field_attr sections, if
+you prefer.
+
+
 =item style
 
 Scalar, either 'down' (the default), or 'across', to render data 'rows'
@@ -2008,6 +2188,46 @@ For example:
   }
 
 
+=item colgroups and cols
+
+Array reference containing an ordered set of hashrefs to be rendered as 
+individual colgroup entries. Array keys and values are mapped to attributes
+and values on the colgroup entries e.g.
+
+  colgroups => [
+    { align => 'center' },
+    { align => 'left', span => 2 },
+    { align => 'right' },
+  ],
+
+would be rendered as:
+
+  <colgroup align="center">
+  <colgroup align="left" span="2">
+  <colgroup align="right">
+
+A colgroup can also contain the special attribute B<cols>, which defines a
+similar array reference containing a set of hashrefs, which are rendered
+as <col> items nested within the colgroup (as an alternative to using 'span').
+For example, this:
+
+  colgroups => [
+    { align => 'center' },
+    { align => 'left', cols => [
+      { class => 'col1', span => '2' },
+      { class => 'col2', width => 20 },
+    ] },
+  ],
+
+would be rendered as:
+
+    <colgroup align="center">
+    <colgroup align="left">
+    <col class="col1" span="2">
+    <col class="col2" width="20">
+    </colgroup>
+
+
 =item data_append 
 
 Array reference containing supplementary data rows to be appended to the table
@@ -2198,6 +2418,17 @@ Boolean (default true). HTML-escapes '<' and '>' characters in data
 values.
 
 
+=item derived
+
+Boolean (default false). Flag indicating that this is a derived field
+i.e. not present in the underlying data, allowing HTML::Tabulate to
+avoid unnecessary lookups. (You are presumably deriving these values
+from other data in the row via a 'value' sub or something.)
+
+Can also be set in a top-level 'derived' arrayref, rather than per-field,
+if you prefer.
+
+
 =item composite
 
 Arrayref. New as of version 0.30, composite fields define an ordered 
@@ -2375,7 +2606,7 @@ subref iterator support (version 0.31).
 
 =head1 COPYRIGHT
 
-Copyright 2003-2010, Gavin Carr.
+Copyright 2003-2011, Gavin Carr.
 
 This program is free software. You may copy or redistribute it under the 
 same terms as perl itself.
