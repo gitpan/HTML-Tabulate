@@ -12,7 +12,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.38';
+$VERSION = '0.39';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -26,6 +26,7 @@ my %VALID_ARG = (
     table => 'HASH/SCALAR',
     thead => 'HASH/SCALAR',
     tbody => 'HASH/SCALAR',
+    tfoot => 'HASH/SCALAR',
     tr => 'HASH/CODE', 
     thtr => 'HASH',
     th => 'HASH',
@@ -557,10 +558,14 @@ sub prerender_munge
         $defn_t->{stripe} = [ undef, $defn_t->{stripe} ];
     }
 
-    # thead implies tbody
+    # thead and tfoot imply tbody
     if ($defn_t->{thead}) {
         $defn_t->{tbody} ||= 1;
         $defn_t->{thead} = {} if ! ref $defn_t->{thead};
+    }
+    if ($defn_t->{tfoot}) {
+        $defn_t->{tbody} ||= 1;
+        $defn_t->{tfoot} = {} if ! ref $defn_t->{tfoot};
     }
 
     # Setup tbody attributes hash for hashref tbodies
@@ -921,26 +926,25 @@ sub cell_format
     my $defn = $self->{defn_t};
 
     # Trim
-    $data =~ s/^\s*(.*?)\s*$/$1/ if $defn->{trim};
+    $data =~ s/^\s*(.*?)\s*$/$1/ if $data ne '' && $defn->{trim};
 
-    if ($data ne '') {
-        my $data_unformatted = $data;
+    my $data_unformatted = $data;
 
-        # 'escape' boolean for simple tag escaping (defaults to on)
-        $data = $self->cell_format_escape($data) 
-            if $fattr->{escape} || ! exists $fattr->{escape};
+    # 'escape' boolean for simple tag escaping (defaults to on)
+    $data = $self->cell_format_escape($data)
+        if $data ne '' && ($fattr->{escape} || ! exists $fattr->{escape});
 
-        # 'format' subroutine or sprintf pattern
-        $data = $self->cell_format_format(@_) 
-            if $fattr->{format};
+    # 'format' subroutine or sprintf pattern
+    $data = $self->cell_format_format(@_)
+        if $fattr->{format};
 
-        # 'link' subroutine or sprintf pattern
-        $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
-            if $fattr->{link};
-    }
+    # 'link' subroutine or sprintf pattern
+    $data = $self->cell_format_link($data, $fattr, $row, $field, $data_unformatted)
+        if $data ne '' && $fattr->{link};
 
     # 'null' defaults
-    $data = $defn->{null} if defined $defn->{null} && $data eq '';
+    $data = $defn->{null}
+        if defined $defn->{null} && $data eq '';
 
     return $data;
 }
@@ -972,12 +976,55 @@ sub cell_merge_extras
 }
 
 #
-# Merge default and field attributes once each for labels and data
+# Split field attr data into label, tfoot, and data buckets
+sub cell_split_label_tfoot_data {
+    my ($self, $fattr, $field) = @_;
+
+    $self->{defn_t}->{label_attr}->{$field} ||= {};
+    $self->{defn_t}->{tfoot_attr}->{$field} ||= {};
+    $self->{defn_t}->{data_attr}->{$field}  ||= {};
+
+    for (keys %$fattr) {
+        if (substr($_,0,6) eq 'label_') {
+            $self->{defn_t}->{label_attr}->{$field}->{substr($_,6)} = $fattr->{$_};
+        }
+        elsif (substr($_,0,6) eq 'tfoot_') {
+            $self->{defn_t}->{tfoot_attr}->{$field}->{substr($_,6)} = $fattr->{$_};
+        }
+        else {
+            $self->{defn_t}->{data_attr}->{$field}->{$_} = $fattr->{$_};
+        }
+    }
+    $self->{defn_t}->{label_attr}->{$field}->{value} = $self->label(delete $fattr->{label}, $field);
+}
+
+#
+# Create tx_attr for each attr bucket by removing attributes in $field_attr
+#
+sub cell_split_out_tx_attr {
+    my ($self, $field) = @_;
+
+    for my $attr (qw(label_attr tfoot_attr data_attr)) {
+        my %tx_attr = %{ $self->{defn_t}->{$attr}->{$field} };
+        my $tx_code = 0;
+        for (keys %tx_attr) { 
+            delete $tx_attr{$_} if exists $self->{field_attr}->{$_};
+            delete $tx_attr{$_} if m/^link_/;
+            $tx_code = 1 if ref $tx_attr{$_} eq 'CODE';
+        }
+        $self->{defn_t}->{$attr}->{$field}->{tx_attr} = \%tx_attr;
+        $self->{defn_t}->{$attr}->{$field}->{tx_code} = $tx_code;
+    }
+}
+
+#
+# Merge default and field attributes once each per-field for labels and data
 #
 sub cell_merge_defaults
 {
     my ($self, $row, $field) = @_;
-    $self->{defn_t}->{field_attr}->{$field} ||= {};
+
+    return if $self->{defn_t}->{data_attr}->{$field};
 
     # Create a temp $fattr hash merging defaults, regexes, and field attrs
     my $fattr = { %{$self->{defn_t}->{field_attr}->{-defaults}},
@@ -990,50 +1037,11 @@ sub cell_merge_defaults
     @$fattr{ keys %{$self->{defn_t}->{field_attr}->{$field}} } = 
         values %{$self->{defn_t}->{field_attr}->{$field}};
    
-    # For labels, keep only label_ attributes
-    if (! defined $row) {
-        my $fattr_l = {};
-        for (keys %$fattr) {
-            next if substr($_,0,6) ne 'label_';
-            $fattr_l->{substr($_,6)} = $fattr->{$_};
-        }
+    # Split out label, data, and tfoot attributes
+    $self->cell_split_label_tfoot_data($fattr, $field);
 
-        # Set 'value' from 'label'
-        $fattr_l->{value} = $self->label($fattr->{label}, $field);
-        # Update fattr
-        $fattr = $fattr_l;
-    }
-
-    # For data, merge defaults and the field attributes, discarding label_ ones
-    else {
-        # Remove all label_ attributes
-        for (keys %$fattr) { delete $fattr->{$_} if substr($_,0,6) eq 'label_'; }
-    }
-
-    # Create tx_attr by removing all $fattr attributes in $field_attr
-    my %tx_attr = %$fattr;
-    for (keys %tx_attr) { 
-      delete $tx_attr{$_} if exists $self->{field_attr}->{$_};
-      delete $tx_attr{$_} if m/^link_/;
-    }
-
-    # If data, save for subsequent rows
-    if ($row) {
-        $fattr->{td_attr} = \%tx_attr;
-        $self->{defn_t}->{field_attr}->{$field} = $fattr;
-    }
-
-    # Check %tx_attr for code values
-    my $tx_code = 0;
-    for my $v (values %tx_attr) {
-         if (ref $v eq 'CODE') {
-             $tx_code = 1;
-             $self->{defn_t}->{field_attr}->{$field}->{td_code} = 1 if $row;
-             last;
-         }
-    }
-
-    return ($fattr, \%tx_attr, $tx_code);
+    # Remove tx_attr for label, data, and tfoot attr buckets
+    $self->cell_split_out_tx_attr($field);
 }
 
 #
@@ -1183,17 +1191,23 @@ sub cell_single
     $tags = 1 unless defined $tags;
     die "Unknown arguments to cell_single: " . join(',', keys %args) if %args;
 
-    # Merge default and field attributes first time through (labels + data)
+    # Merge default and field attributes once for each field
+    $self->cell_merge_defaults($row, $field)
+        if ! $self->{defn_t}->{data_attr}->{$field};
+
     my $tx_code = 0;
     unless ($fattr && $tx_attr) {
-        if (! defined $row || ! $self->{defn_t}->{field_attr}->{$field}->{td_attr}) {
-            ($fattr, $tx_attr, $tx_code) = $self->cell_merge_defaults($row, $field);
+        if (! defined $row || $row eq 'thead') {
+            $fattr = $self->{defn_t}->{label_attr}->{$field};
+        }
+        elsif ($row eq 'tfoot') {
+            $fattr = $self->{defn_t}->{tfoot_attr}->{$field};
         }
         else {
-            $fattr = $self->{defn_t}->{field_attr}->{$field};
-            $tx_attr = $fattr->{td_attr};
-            $tx_code = $fattr->{td_code};
+            $fattr = $self->{defn_t}->{data_attr}->{$field};
         }
+        $tx_attr = $fattr->{tx_attr};
+        $tx_code = $fattr->{tx_code};
     }
 
     # Standard (non-composite) fields
@@ -1472,7 +1486,6 @@ sub data_iterator
 sub body_down 
 {
     my ($self, $set) = @_;
-    my $body = '';
 
     # Get data_iterator
     my @fields = @{$self->{defn_t}->{fields}} 
@@ -1481,21 +1494,22 @@ sub body_down
     my $data_prepend = $self->{defn_t}->{data_prepend};
 
     # Labels/headings
+    my $thead = '';
     if ($self->{defn_t}->{labels} && @fields) {
-        $body .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n" 
+        $thead .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n" 
             if $self->{defn_t}->{thead};
 
         if ($self->{defn_t}->{labelgroups}) {
             my ($fields1, $fields2, $field1_tx_attr) = $self->labelgroup_fields;
-            $body .= $self->row_down(undef, 0, fields => $fields1, tx_attr_extra => $field1_tx_attr);
-            $body .= $self->row_down(undef, 0, fields => $fields2) if @$fields2;
+            $thead .= $self->row_down(undef, 0, fields => $fields1, tx_attr_extra => $field1_tx_attr);
+            $thead .= $self->row_down(undef, 0, fields => $fields2) if @$fields2;
         }
         else {
-            $body .= $self->row_down(undef, 0);
+            $thead .= $self->row_down(undef, 0);
         }
 
         if ($self->{defn_t}->{thead}) {
-          $body .= $self->end_tag('thead') . "\n";
+          $thead .= $self->end_tag('thead') . "\n";
           $self->{defn_t}->{thead} = 0;
         }
     }
@@ -1503,37 +1517,45 @@ sub body_down
         # If thead set and labels isn't, use the first data row
         my $row = $data_prepend && @$data_prepend ? shift @$data_prepend : $data_next->();
         if ($row) {
-            $body .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n";
-            $body .= $self->row_down($row, 1);
-            $body .= $self->end_tag('thead') . "\n";
+            $thead .= $self->start_tag('thead', $self->{defn_t}->{thead}) . "\n";
+            $thead .= $self->row_down($row, 1);
+            $thead .= $self->end_tag('thead') . "\n";
         }
     }
 
     # Table body
+    my $tbody = '';
     my $rownum = 1;
     if ($data_prepend && @$data_prepend) {
         for my $row (@$data_prepend) {
-            $body .= $self->tbody($row, $rownum);
-            $body .= $self->row_down($row, $rownum);
+            $tbody .= $self->tbody($row, $rownum);
+            $tbody .= $self->row_down($row, $rownum);
             $rownum++;
         } 
     }
     while (my $row = $data_next->()) {
-        $body .= $self->tbody($row, $rownum);
-        $body .= $self->row_down($row, $rownum);
+        $tbody .= $self->tbody($row, $rownum);
+        $tbody .= $self->row_down($row, $rownum);
         $rownum++;
     }
     if (my $data_append = $self->{defn_t}->{data_append}) {
         for my $row (@$data_append) {
-            $body .= $self->tbody($row, $rownum);
-            $body .= $self->row_down($row, $rownum);
+            $tbody .= $self->tbody($row, $rownum);
+            $tbody .= $self->row_down($row, $rownum);
             $rownum++;
         } 
     }
 
-    $body .= $self->end_tag('tbody') . "\n" if $self->{defn_t}->{tbody_open};
+    $tbody .= $self->end_tag('tbody') . "\n" if $self->{defn_t}->{tbody_open};
 
-    return $body;
+    my $tfoot = '';
+    if ($self->{defn_t}->{tfoot}) {
+        $tfoot .= $self->start_tag('tfoot', $self->{defn_t}->{tfoot}) . "\n";
+        $tfoot .= $self->row_down('tfoot', $rownum);
+        $tfoot .= $self->end_tag('tfoot') . "\n";
+    }
+
+    return $thead . $tfoot . $tbody;
 }
 
 #
