@@ -12,7 +12,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.39';
+$VERSION = '0.40';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -1107,7 +1107,7 @@ sub cell_composite
         or die "Missing composite field attribute";
     my @composite = ();
     for my $f (@$composite) {
-        push @composite, $self->cell($row, $f, undef, undef, tags => 0);
+        push @composite, $self->cell_single(row => $row, field => $f, tags => 0);
     }
 
     my $composite_join = $fattr->{composite_join} || ' ';
@@ -1286,12 +1286,19 @@ sub stripe
                 unless $rownum == 0 && exists $tr->{bgcolor};
         }
         elsif (ref $stripe->[$r] eq 'HASH') {
+            # Class attributes are special in that they're additive,
+            # so we can merge instead of overwriting
+            if ($stripe->[$r]->{class} && $tr->{class}) {
+                $tr->{class} = "$stripe->[$r]->{class} $tr->{class}";
+            }
+
             # Existing attributes take precedence over stripe ones for header
-            if ($rownum == 0) {
+            elsif ($rownum == 0) {
                 for (keys %{$stripe->[$r]}) {
                     $tr->{$_} = $stripe->[$r]->{$_} unless exists $tr->{$_};
                 }
             }
+
             # For non-header rows, merge attributes straight into $tr
             else {
                 @$tr{keys %{$stripe->[$r]}} = values %{$stripe->[$r]};
@@ -1566,16 +1573,22 @@ sub row_across
     my ($self, $data, $rownum, $field) = @_;
     my @cells = ();
     my @across_row = ();
+    my $skip_count = 0;
 
     # Label/heading
     if ($self->{defn_t}->{labels}) {
-        push @cells, $self->cell(undef, $field);
-        push @across_row, $self->cell(undef, $field, undef, undef, tags => 0);
+        push @cells, $self->cell_single(field => $field, skip_count => \$skip_count);
+        push @across_row, $self->cell_single(field => $field, tags => 0);
     }
 
     # Data
     for my $row (@$data) {
-        push @cells, $self->cell($row, $field);
+        if ($skip_count > 0) {
+            $skip_count--;
+            next;
+        }
+
+        push @cells, $self->cell_single(row => $row, field => $field, skip_count => \$skip_count);
         push @across_row, $self->cell_value($row, $field);
     }
 
