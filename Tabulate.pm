@@ -12,7 +12,7 @@ require Exporter;
 @EXPORT = qw();
 @EXPORT_OK = qw(&render);
 
-$VERSION = '0.42';
+$VERSION = '0.43';
 my $DEFAULT_TEXT_FORMAT = "<p>%s</p>\n";
 my %DEFAULT_DEFN = (
     style       => 'down', 
@@ -869,7 +869,7 @@ sub cell_format_format
     my ($self, $data, $fattr, $row, $field) = @_;
     my $ref = ref $fattr->{format};
     croak "[cell_format] invalid '$field' format: $ref" if $ref && $ref ne 'CODE';
-    $data = &{$fattr->{format}}($data, $row || {}, $field) if $ref eq 'CODE';
+    $data = $fattr->{format}->($data, $row || {}, $field) if $ref eq 'CODE';
     $data = sprintf $fattr->{format}, $data if ! $ref;
     return $data;
 }
@@ -891,7 +891,7 @@ sub cell_format_link
     my $ref = ref $fattr->{link};
     croak "[cell_format] invalid '$field' link: $ref"
         if $ref && $ref ne 'CODE';
-    $ldata = &{$fattr->{link}}($data_unformatted, $row || {}, $field) 
+    $ldata = $fattr->{link}->($data_unformatted, $row || {}, $field)
         if $ref eq 'CODE';
     $ldata = sprintf $fattr->{link}, $data_unformatted 
         if ! $ref;
@@ -1064,14 +1064,10 @@ sub cell_value
             $value = $row->[ $i ] if defined $i;
         }
         else {
-            # get_column() methods e.g. DBIx::Class
-            if (eval { $row->can('get_column') }) {
-                $value = eval { $row->get_column($field) };
-            }
             # Allow field-methods e.g. Class::DBI, DBIx::Class
-            elsif (eval { $row->can($field) }
+            if (eval { $row->can($field) }
                    && $field ne 'delete') {    # special DBIx::Class protection :-)
-                $value = eval "\$row->$field()";
+                $value = eval { $row->$field() };
             }
             # Hash-based rows
             elsif (ref $row eq 'HASH' && exists $row->{$field}) {
@@ -1084,7 +1080,7 @@ sub cell_value
     if (exists $fattr->{value} && ref $fattr->{value}) {
         my $ref = ref $fattr->{value};
         if ($ref eq 'CODE') {
-            $value = &{$fattr->{value}}($value, $row, $field);
+            $value = $fattr->{value}->($value, $row, $field);
         }
         else {
             croak "[cell_value] invalid '$field' value (not scalar or code ref): $ref";
